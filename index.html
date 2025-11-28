@@ -3,9 +3,806 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hola Mundo</title>
+    <title>Gym Tracker - Entrenamientos por Semana</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        header {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        header h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        header p {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .selector-semanas {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .selector-semanas label {
+            font-weight: 600;
+            color: #333;
+            margin: 0;
+        }
+        
+        .selector-semanas select {
+            padding: 10px 15px;
+            border: 2px solid #667eea;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        .new-semana-btn {
+            padding: 10px 20px;
+            background: #51cf66;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        @media (max-width: 1024px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .form-section {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            height: fit-content;
+        }
+        
+        .form-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 20px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            color: #555;
+            font-weight: 600;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 5px rgba(102, 126, 234, 0.3);
+        }
+        
+        button {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+            font-size: 14px;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+        }
+        
+        .series-container {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border: 2px solid #e0e0e0;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .serie-item {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr auto;
+            gap: 8px;
+            margin-bottom: 8px;
+            align-items: end;
+        }
+        
+        .serie-item input {
+            margin: 0;
+            padding: 8px;
+        }
+        
+        .remove-serie {
+            background: #ff6b6b;
+            width: auto;
+            padding: 6px 10px;
+            font-size: 11px;
+            margin: 0;
+        }
+        
+        .add-serie-btn {
+            background: #51cf66;
+            margin-top: 10px;
+            font-size: 13px;
+        }
+        
+        .days-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+        }
+        
+        .day-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .day-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+        }
+        
+        .day-header input {
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid white;
+            color: white;
+            font-weight: 600;
+            margin: 0 0 8px 0;
+        }
+        
+        .day-header input::placeholder {
+            color: rgba(255, 255, 255, 0.7);
+        }
+        
+        .day-count {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+        
+        .day-content {
+            padding: 15px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        
+        .exercise-card {
+            background: #f9f9f9;
+            border-left: 4px solid #667eea;
+            padding: 12px;
+            margin-bottom: 12px;
+            border-radius: 6px;
+            transition: all 0.3s;
+        }
+        
+        .exercise-card:hover {
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+            transform: translateX(3px);
+        }
+        
+        .exercise-card h3 {
+            color: #333;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+        
+        .exercise-muscle {
+            color: #667eea;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        
+        .series-info {
+            background: white;
+            padding: 8px;
+            border-radius: 4px;
+            margin-bottom: 6px;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        
+        .series-info strong {
+            color: #667eea;
+        }
+        
+        .exercise-notes {
+            color: #666;
+            font-size: 11px;
+            font-style: italic;
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px solid #e0e0e0;
+        }
+        
+        .exercise-actions {
+            display: flex;
+            gap: 5px;
+            margin-top: 8px;
+        }
+        
+        .delete-btn {
+            background: #ff6b6b;
+            flex: 1;
+            padding: 6px;
+            font-size: 11px;
+        }
+        
+        .no-exercises {
+            text-align: center;
+            color: #999;
+            padding: 20px 10px;
+            font-size: 13px;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        
+        .modal-content {
+            background: white;
+            margin: 10% auto;
+            padding: 25px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .modal-content h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .modal-buttons button {
+            flex: 1;
+        }
+        
+        .close-modal {
+            background: #999;
+        }
+        
+        .routine-item {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        
+        .routine-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-weight: 600;
+        }
+        
+        .routine-header:hover {
+            opacity: 0.9;
+        }
+        
+        .routine-toggle {
+            font-size: 20px;
+            margin-right: 10px;
+        }
+        
+        .routine-content {
+            display: none;
+            padding: 15px;
+        }
+        
+        .routine-content.expanded {
+            display: block;
+        }
+        
+        .day-item {
+            background: #f0f0f0;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            overflow: hidden;
+            border-left: 4px solid #667eea;
+        }
+        
+        .day-item-header {
+            padding: 12px 15px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-weight: 600;
+            color: #333;
+            background: #e8e8e8;
+        }
+        
+        .day-item-header:hover {
+            background: #d8d8d8;
+        }
+        
+        .day-toggle {
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        
+        .day-item-content {
+            display: none;
+            padding: 12px 15px;
+            background: white;
+        }
+        
+        .day-item-content.expanded {
+            display: block;
+        }
+        
+        .day-item-count {
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
 </head>
 <body>
-    <h1>Hola Mundo</h1>
+    <div class="container">
+        <header>
+            <h1>💪 Gym Tracker - Rutinas Semanales</h1>
+            <p>Crea rutinas semanales, nombra cada día, y registra tus ejercicios.</p>
+        </header>
+        
+        <div class="selector-semanas">
+            <label for="weekSelect">Selecciona una rutina:</label>
+            <select id="weekSelect" onchange="cambiarSemana()"></select>
+            <button class="new-semana-btn" onclick="crearNuevaSemana()">+ Nueva Rutina</button>
+        </div>
+        
+        <div class="main-grid">
+            <div class="form-section">
+                <h2>Nuevo Ejercicio</h2>
+                <form id="exerciseForm">
+                    <div class="form-group">
+                        <label for="trainingDay">Día *</label>
+                        <select id="trainingDay" required>
+                            <option value="">Selecciona un día</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="exerciseName">Nombre del Ejercicio *</label>
+                        <input type="text" id="exerciseName" placeholder="Ej: Press de Banca" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="muscleGroup">Grupo Muscular *</label>
+                        <select id="muscleGroup" required>
+                            <option value="">Selecciona un grupo</option>
+                            <option value="Pecho">Pecho</option>
+                            <option value="Espalda">Espalda</option>
+                            <option value="Bíceps">Bíceps</option>
+                            <option value="Tríceps">Tríceps</option>
+                            <option value="Trapecio">Trapecio</option>
+                            <option value="Cuádriceps">Cuádriceps</option>
+                            <option value="Femoral">Femoral</option>
+                            <option value="Glúteo">Glúteo</option>
+                            <option value="Gemelo">Gemelo</option>
+                            <option value="Abdominales">Abdominales</option>
+                            <option value="Hombro">Hombro</option>
+                            <option value="Antebrazo">Antebrazo</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="exerciseNotes">Notas</label>
+                        <textarea id="exerciseNotes" placeholder="Observaciones..." rows="2"></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Series</label>
+                        <div class="series-container">
+                            <div id="seriesContainer"></div>
+                            <button type="button" class="add-serie-btn" onclick="addSerie()">+ Añadir Serie</button>
+                        </div>
+                    </div>
+                    
+                    <button type="submit">Guardar Ejercicio</button>
+                </form>
+            </div>
+            
+            <div id="daysView">
+                <div id="routinesContainer"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="newWeekModal" class="modal">
+        <div class="modal-content">
+            <h2>Nueva Rutina Semanal</h2>
+            <div class="form-group">
+                <label for="newWeekName">Nombre de la rutina</label>
+                <input type="text" id="newWeekName" placeholder="Ej: Rutina A">
+            </div>
+            <div class="modal-buttons">
+                <button onclick="guardarNuevaSemana()">Crear</button>
+                <button class="close-modal" onclick="cerrarModal()">Cancelar</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const STORAGE_KEY = 'gymTrackerRoutines';
+        let routines = {};
+        let currentWeekId = null;
+        
+        function loadData() {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) {
+                routines = JSON.parse(saved);
+                const weekIds = Object.keys(routines);
+                if (weekIds.length > 0) {
+                    currentWeekId = weekIds[0];
+                } else {
+                    crearNuevaSemana();
+                }
+            } else {
+                crearNuevaSemana();
+            }
+        }
+        
+        function saveData() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(routines));
+        }
+        
+        function crearNuevaSemana() {
+            document.getElementById('newWeekModal').style.display = 'block';
+        }
+        
+        function cerrarModal() {
+            document.getElementById('newWeekModal').style.display = 'none';
+        }
+        
+        function guardarNuevaSemana() {
+            const name = document.getElementById('newWeekName').value.trim();
+            if (!name) {
+                alert('Ingresa un nombre para la rutina');
+                return;
+            }
+            
+            const weekId = 'week_' + Date.now();
+            const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+            
+            routines[weekId] = {
+                name: name,
+                days: {}
+            };
+            
+            days.forEach(day => {
+                routines[weekId].days[day] = {
+                    dayName: day,
+                    exercises: []
+                };
+            });
+            
+            currentWeekId = weekId;
+            saveData();
+            document.getElementById('newWeekName').value = '';
+            cerrarModal();
+            updateWeekSelector();
+            updateDaySelector();
+            renderDays();
+        }
+        
+        function cambiarSemana() {
+            currentWeekId = document.getElementById('weekSelect').value;
+            updateDaySelector();
+            renderDays();
+        }
+        
+        function updateWeekSelector() {
+            const select = document.getElementById('weekSelect');
+            select.innerHTML = '';
+            
+            Object.keys(routines).forEach(weekId => {
+                const option = document.createElement('option');
+                option.value = weekId;
+                option.textContent = routines[weekId].name;
+                if (weekId === currentWeekId) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+        }
+        
+        function updateDaySelector() {
+            const select = document.getElementById('trainingDay');
+            select.innerHTML = '<option value="">Selecciona un día</option>';
+            
+            if (currentWeekId && routines[currentWeekId]) {
+                Object.keys(routines[currentWeekId].days).forEach(day => {
+                    const option = document.createElement('option');
+                    option.value = day;
+                    option.textContent = day;
+                    select.appendChild(option);
+                });
+            }
+        }
+        
+        function addSerie() {
+            const container = document.getElementById('seriesContainer');
+            const serieIndex = container.children.length;
+            const serieHTML = `
+                <div class="serie-item" id="serie-${serieIndex}">
+                    <input type="number" placeholder="Peso (kg)" class="serie-peso" step="any" min="0">
+                    <input type="number" placeholder="Reps" class="serie-reps" step="1" min="1">
+                    <input type="number" placeholder="RIR" class="serie-rir" step="0.5" min="0" max="10">
+                    <input type="text" placeholder="Nota" class="serie-nota" maxlength="20">
+                    <button type="button" class="remove-serie" onclick="removeSerie('serie-${serieIndex}')">✕</button>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', serieHTML);
+        }
+        
+        function removeSerie(id) {
+            const element = document.getElementById(id);
+            if (element) element.remove();
+        }
+        
+        function getSeriesData() {
+            const serieItems = document.querySelectorAll('.serie-item');
+            const series = [];
+            
+            serieItems.forEach((item, index) => {
+                const peso = parseFloat(item.querySelector('.serie-peso').value) || 0;
+                const reps = parseInt(item.querySelector('.serie-reps').value) || 0;
+                
+                if (peso > 0 || reps > 0) {
+                    series.push({
+                        number: index + 1,
+                        peso: peso,
+                        reps: reps,
+                        rir: parseFloat(item.querySelector('.serie-rir').value) || 0,
+                        nota: item.querySelector('.serie-nota').value || ''
+                    });
+                }
+            });
+            
+            return series;
+        }
+        
+        function clearForm() {
+            document.getElementById('exerciseForm').reset();
+            document.getElementById('seriesContainer').innerHTML = '';
+            addSerie();
+        }
+        
+        document.getElementById('exerciseForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const day = document.getElementById('trainingDay').value;
+            const name = document.getElementById('exerciseName').value;
+            const muscleGroup = document.getElementById('muscleGroup').value;
+            const notes = document.getElementById('exerciseNotes').value;
+            const series = getSeriesData();
+            
+            if (!day || series.length === 0) {
+                alert('Completa todos los campos');
+                return;
+            }
+            
+            // Buscar la semana seleccionada en el selector
+            const weekSelect = document.getElementById('weekSelect');
+            const weekId = weekSelect.value || Object.keys(routines)[0];
+            
+            if (!weekId || !routines[weekId]) {
+                alert('Selecciona una rutina primero');
+                return;
+            }
+            
+            const exercise = {
+                id: Date.now(),
+                name: name,
+                muscleGroup: muscleGroup,
+                notes: notes,
+                series: series
+            };
+            
+            routines[weekId].days[day].exercises.unshift(exercise);
+            saveData();
+            clearForm();
+            renderDays();
+            
+            alert('✓ Ejercicio guardado');
+        });
+        
+        function renderDays() {
+            const container = document.getElementById('routinesContainer');
+            
+            if (!Object.keys(routines).length) {
+                container.innerHTML = '<div class="no-exercises">No hay rutinas. Crea una nueva.</div>';
+                return;
+            }
+            
+            container.innerHTML = Object.keys(routines).map(weekId => {
+                const routine = routines[weekId];
+                const days = Object.keys(routine.days);
+                const totalExercises = days.reduce((sum, dayKey) => sum + routine.days[dayKey].exercises.length, 0);
+                
+                const daysHTML = days.map(dayKey => {
+                    const dayData = routine.days[dayKey];
+                    const dayName = dayData.dayName;
+                    const exercises = dayData.exercises || [];
+                    
+                    const exercisesHTML = exercises.length === 0 
+                        ? '<div class="no-exercises">Sin ejercicios</div>'
+                        : exercises.map(ex => {
+                            const seriesHTML = ex.series.map(s => 
+                                `<div class="series-info">
+                                    <strong>S${s.number}:</strong> ${s.peso}kg × ${s.reps}${s.rir > 0 ? ` (RIR: ${s.rir})` : ''}${s.nota ? ` • ${s.nota}` : ''}
+                                </div>`
+                            ).join('');
+                            
+                            return `
+                                <div class="exercise-card">
+                                    <h3>${ex.name}</h3>
+                                    <div class="exercise-muscle">${ex.muscleGroup}</div>
+                                    ${seriesHTML}
+                                    ${ex.notes ? `<div class="exercise-notes">📝 ${ex.notes}</div>` : ''}
+                                    <div class="exercise-actions">
+                                        <button class="delete-btn" onclick="deleteExercise('${weekId}', '${dayKey}', ${ex.id})">Eliminar</button>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+                    
+                    return `
+                        <div class="day-item">
+                            <div class="day-item-header" onclick="toggleDay(this)">
+                                <div>
+                                    <span class="day-toggle">▶</span>
+                                    <span>${dayName}</span>
+                                    <span class="day-item-count"> (${exercises.length})</span>
+                                </div>
+                            </div>
+                            <div class="day-item-content">
+                                ${exercisesHTML}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+                return `
+                    <div class="routine-item">
+                        <div class="routine-header" onclick="toggleRoutine(this, '${weekId}')">
+                            <div>
+                                <span class="routine-toggle">▶</span>
+                                <span>${routine.name}</span>
+                                <span style="font-size: 12px; margin-left: 10px; opacity: 0.8;">(${totalExercises} ejercicios)</span>
+                            </div>
+                        </div>
+                        <div class="routine-content" id="routine-${weekId}">
+                            ${daysHTML}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function toggleRoutine(header, weekId) {
+            const content = document.getElementById('routine-' + weekId);
+            const toggle = header.querySelector('.routine-toggle');
+            
+            content.classList.toggle('expanded');
+            toggle.textContent = content.classList.contains('expanded') ? '▼' : '▶';
+        }
+        
+        function toggleDay(header) {
+            const content = header.nextElementSibling;
+            const toggle = header.querySelector('.day-toggle');
+            
+            content.classList.toggle('expanded');
+            toggle.textContent = content.classList.contains('expanded') ? '▼' : '▶';
+        }
+        
+        function deleteExercise(weekId, dayKey, exerciseId) {
+            if (confirm('¿Eliminar este ejercicio?')) {
+                routines[weekId].days[dayKey].exercises = 
+                    routines[weekId].days[dayKey].exercises.filter(e => e.id !== exerciseId);
+                saveData();
+                renderDays();
+            }
+        }
+        
+        window.onclick = function(event) {
+            const modal = document.getElementById('newWeekModal');
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        }
+        
+        function init() {
+            loadData();
+            updateWeekSelector();
+            updateDaySelector();
+            addSerie();
+            renderDays();
+        }
+        
+        init();
+    </script>
 </body>
 </html>
