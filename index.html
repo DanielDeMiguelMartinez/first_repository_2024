@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gym Tracker - Entrenamientos por Semana</title>
+    <title>LIFTLOG - Entrenamientos por Semana</title>
     <style>
         * {
             margin: 0;
@@ -12,10 +12,11 @@
         }
         
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f4f6f8;
             min-height: 100vh;
-            padding: 20px;
+            padding: 28px;
+            color: #202124;
         }
         
         .container {
@@ -24,33 +25,33 @@
         }
         
         header {
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            margin-bottom: 30px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            background: transparent;
+            padding: 8px 0 18px 0;
+            margin-bottom: 18px;
         }
         
         header h1 {
-            color: #333;
-            margin-bottom: 10px;
+            color: #111827;
+            margin-bottom: 6px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
         }
-        
+
         header p {
-            color: #666;
-            font-size: 14px;
+            color: #4b5563;
+            font-size: 13px;
         }
         
         .selector-semanas {
             background: white;
-            padding: 20px;
-            border-radius: 12px;
-            margin-bottom: 30px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            padding: 12px;
+            border-radius: 10px;
+            margin-bottom: 20px;
             display: flex;
             gap: 10px;
             flex-wrap: wrap;
             align-items: center;
+            border: 1px solid #e6e9ee;
         }
         
         .selector-semanas label {
@@ -67,13 +68,24 @@
         }
         
         .new-semana-btn {
-            padding: 10px 20px;
-            background: #51cf66;
+            padding: 8px 14px;
+            background: #111827;
             color: white;
             border: none;
-            border-radius: 6px;
+            border-radius: 8px;
             cursor: pointer;
             font-weight: 600;
+            font-size: 13px;
+        }
+        .delete-week-btn {
+            padding: 8px 12px;
+            background: transparent;
+            color: #ef4444;
+            border: 1px solid #fee2e2;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
         }
         
         .main-grid {
@@ -91,10 +103,10 @@
         
         .form-section {
             background: white;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            padding: 18px;
+            border-radius: 10px;
             height: fit-content;
+            border: 1px solid #e6e9ee;
         }
         
         .form-section h2 {
@@ -107,6 +119,38 @@
         
         .form-group {
             margin-bottom: 15px;
+        }
+
+        /* Back button for full-day view */
+        .back-btn {
+            position: fixed;
+            left: 16px;
+            top: 16px;
+            z-index: 1400;
+            padding: 10px 14px;
+            border-radius: 12px;
+            background: #2563eb; /* blue */
+            color: #fff;
+            border: none;
+            box-shadow: 0 12px 30px rgba(37,99,235,0.18);
+            font-weight: 700;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 16px;
+        }
+
+        .back-btn svg {
+            width: 22px;
+            height: 22px;
+            display: block;
+            stroke: currentColor;
+        }
+
+        .back-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 16px 36px rgba(37,99,235,0.22);
         }
         
         label {
@@ -135,20 +179,18 @@
         
         button {
             width: 100%;
-            padding: 12px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 10px;
+            background: #111827;
             color: white;
             border: none;
-            border-radius: 6px;
+            border-radius: 8px;
             font-weight: 600;
             cursor: pointer;
-            transition: transform 0.2s;
+            transition: opacity 0.12s ease-in-out;
             font-size: 14px;
         }
-        
-        button:hover {
-            transform: translateY(-2px);
-        }
+
+        button:hover { opacity: 0.95; }
         
         .series-container {
             background: #f9f9f9;
@@ -417,19 +459,102 @@
             font-size: 12px;
             color: #666;
         }
+        /* Calendar styles */
+        .calendar {
+            background: white;
+            padding: 18px;
+            border-radius: 12px;
+            box-shadow: 0 6px 25px rgba(15,23,42,0.06);
+            margin-bottom: 20px;
+            display: grid;
+            grid-template-columns: 1fr 3fr;
+            gap: 16px;
+        }
+
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        .calendar-day {
+            padding: 14px 8px;
+            border-radius: 10px;
+            background: #fbfdff;
+            text-align: center;
+            cursor: pointer;
+            border: 1px solid transparent;
+            min-height: 80px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 6px;
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
+        }
+
+        .calendar-day.today {
+            background: linear-gradient(180deg, #eef2ff, #ffffff);
+            border: 1px solid #c7d2fe;
+            box-shadow: 0 8px 24px rgba(99,102,241,0.12);
+            transform: scale(1.03);
+        }
+
+        .calendar-day:hover {
+            border-color: #667eea50;
+            background: #ffffff;
+        }
+
+        .calendar-day .date {
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 6px;
+        }
+
+        .calendar-day .count {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .edit-day-btn {
+            background: transparent;
+            border: none;
+            color: #374151;
+            font-size: 13px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .edit-day-btn:hover { background: rgba(55,65,81,0.06); }
+        .modal-content .add-serie-btn { width: auto; }
+        .today-exercise-card .delete-btn { padding:6px 8px; font-size:12px }
+        .today-exercise-card {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 8px;
+            margin-bottom: 8px;
+            border: 1px solid #eef2ff;
+            font-size: 13px;
+        }
+
+        .today-exercise-card h4 { margin: 0 0 6px 0; font-size: 13px; }
+        .today-series { font-size: 12px; color: #374151; }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>💪 Gym Tracker - Rutinas Semanales</h1>
-            <p>Crea rutinas semanales, nombra cada día, y registra tus ejercicios.</p>
+            <h1>🏋️ LIFTLOG - Rutinas Semanales</h1>
+            <p>Gestiona tus semanas, marca días de descanso y registra tus entrenamientos.</p>
         </header>
         
         <div class="selector-semanas">
             <label for="weekSelect">Selecciona una rutina:</label>
             <select id="weekSelect" onchange="cambiarSemana()"></select>
             <button class="new-semana-btn" onclick="crearNuevaSemana()">+ Nueva Rutina</button>
+            <button class="delete-week-btn" onclick="deleteSelectedWeek()">Eliminar Rutina</button>
+            
         </div>
         
         <div class="main-grid">
@@ -448,24 +573,7 @@
                         <input type="text" id="exerciseName" placeholder="Ej: Press de Banca" required>
                     </div>
                     
-                    <div class="form-group">
-                        <label for="muscleGroup">Grupo Muscular *</label>
-                        <select id="muscleGroup" required>
-                            <option value="">Selecciona un grupo</option>
-                            <option value="Pecho">Pecho</option>
-                            <option value="Espalda">Espalda</option>
-                            <option value="Bíceps">Bíceps</option>
-                            <option value="Tríceps">Tríceps</option>
-                            <option value="Trapecio">Trapecio</option>
-                            <option value="Cuádriceps">Cuádriceps</option>
-                            <option value="Femoral">Femoral</option>
-                            <option value="Glúteo">Glúteo</option>
-                            <option value="Gemelo">Gemelo</option>
-                            <option value="Abdominales">Abdominales</option>
-                            <option value="Hombro">Hombro</option>
-                            <option value="Antebrazo">Antebrazo</option>
-                        </select>
-                    </div>
+                    
                     
                     <div class="form-group">
                         <label for="exerciseNotes">Notas</label>
@@ -485,6 +593,40 @@
             </div>
             
             <div id="daysView">
+                <div id="calendarView" class="calendar">
+                    <div id="todayView" style="padding:8px;">
+                        <div style="font-size:13px; color:#6b7280; font-weight:600;">Hoy</div>
+                        <div id="todayLarge" style="margin-top:8px; padding:12px; background:#ffffff; border-radius:10px; box-shadow:0 6px 18px rgba(15,23,42,0.04);">
+                            <div id="todayLabel" style="font-weight:700; font-size:16px; color:#111827">--</div>
+                            <div id="todayInfo" style="color:#6b7280; font-size:13px; margin-top:6px">--</div>
+                            <div id="todayExercises" style="margin-top:10px; max-height:220px; overflow:auto; padding-top:6px"></div>
+                            <div style="margin-top:10px"><button style="width:auto; padding:8px 12px;" onclick="openToday()">Abrir hoy</button></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                            <h3 id="monthTitle" style="margin:0; font-size:15px; color:#111827">Calendario — Mes</h3>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <button style="padding:6px 10px; border-radius:8px; background:transparent; border:1px solid #e6e9ee;" onclick="changeMonth(-1)">◀</button>
+                                <button style="padding:6px 10px; border-radius:8px; background:transparent; border:1px solid #e6e9ee;" onclick="changeMonth(1)">▶</button>
+                            </div>
+                        </div>
+                        <div id="weekSelectors" style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap"></div>
+                        <div id="calendarGrid" class="calendar-grid" style="margin-top:12px"></div>
+                    </div>
+                </div>
+                <div id="dayFullView" style="display:none;">
+                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px">
+                        <button class="back-btn" onclick="closeDayFullView()" aria-label="Volver a la vista principal">
+                            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                <path d="M15 18L9 12L15 6" stroke="#0f172a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                            <span>Volver</span>
+                        </button>
+                        <div id="dayFullTitle" style="font-weight:700; font-size:16px; color:#111827"></div>
+                    </div>
+                    <div id="dayFullExercises" style="max-height:70vh; overflow:auto;"></div>
+                </div>
                 <div id="routinesContainer"></div>
             </div>
         </div>
@@ -503,33 +645,131 @@
             </div>
         </div>
     </div>
+
+            <div id="editExerciseModal" class="modal">
+                <div class="modal-content">
+                    <h2>Editar Ejercicio</h2>
+                    <div class="form-group">
+                        <label for="editExerciseName">Nombre del Ejercicio *</label>
+                        <input type="text" id="editExerciseName" placeholder="Ej: Press de Banca">
+                    </div>
+                    <div class="form-group">
+                        <label for="editMuscleGroup">Grupo Muscular</label>
+                        <select id="editMuscleGroup">
+                            <option value="">(ninguno)</option>
+                            <option value="Pecho">Pecho</option>
+                            <option value="Espalda">Espalda</option>
+                            <option value="Bíceps">Bíceps</option>
+                            <option value="Tríceps">Tríceps</option>
+                            <option value="Trapecio">Trapecio</option>
+                            <option value="Cuádriceps">Cuádriceps</option>
+                            <option value="Femoral">Femoral</option>
+                            <option value="Glúteo">Glúteo</option>
+                            <option value="Gemelo">Gemelo</option>
+                            <option value="Abdominales">Abdominales</option>
+                            <option value="Hombro">Hombro</option>
+                            <option value="Antebrazo">Antebrazo</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="editExerciseNotes">Notas</label>
+                        <textarea id="editExerciseNotes" rows="2"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Series</label>
+                        <div class="series-container">
+                            <div id="editSeriesContainer"></div>
+                            <button type="button" class="add-serie-btn" onclick="addEditSerie()">+ Añadir Serie</button>
+                        </div>
+                    </div>
+                    <div class="modal-buttons">
+                        <button onclick="saveEditedExercise()">Guardar</button>
+                        <button class="close-modal" onclick="closeEditModal()">Cancelar</button>
+                    </div>
+                </div>
+            </div>
     
     <script>
-        const STORAGE_KEY = 'gymTrackerRoutines';
+        const STORAGE_KEY = 'liftlogRoutines';
+        const LEGACY_STORAGE_KEY = 'gymTrackerRoutines';
+        const ASSIGNMENTS_KEY = 'liftlogWeekAssignments';
         let routines = {};
         let currentWeekId = null;
+        let assignments = {}; // weekStartDate (YYYY-MM-DD) => weekId
+        let calendarYearOffset = 0; // 0 = this month
         
         function loadData() {
-            const saved = localStorage.getItem(STORAGE_KEY);
-            if (saved) {
-                routines = JSON.parse(saved);
-                const weekIds = Object.keys(routines);
-                if (weekIds.length > 0) {
-                    currentWeekId = weekIds[0];
-                } else {
-                    crearNuevaSemana();
+            // Prefer new key, fall back to legacy key if present (migration)
+            let saved = localStorage.getItem(STORAGE_KEY);
+            if (!saved) {
+                const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+                if (legacy) {
+                    try {
+                        routines = JSON.parse(legacy);
+                        // persist under new key
+                        saveData();
+                    } catch (e) {
+                        routines = {};
+                    }
+                    const weekIds = Object.keys(routines);
+                    currentWeekId = weekIds.length ? weekIds[0] : null;
+                    return;
                 }
-            } else {
-                crearNuevaSemana();
+                // if no routines exist, create a default empty routine so day clicks show an empty day instead of opening the modal
+                createEmptyWeek('Rutina 1');
+                return;
             }
+
+            try {
+                routines = JSON.parse(saved);
+            } catch (e) {
+                routines = {};
+            }
+
+            const weekIds = Object.keys(routines);
+            if (weekIds.length > 0) {
+                currentWeekId = weekIds[0];
+            } else {
+                createEmptyWeek('Rutina 1');
+            }
+            // load assignments
+            loadAssignments();
         }
         
         function saveData() {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(routines));
+            renderCalendar();
         }
+
+        function loadAssignments() {
+            const saved = localStorage.getItem(ASSIGNMENTS_KEY);
+            if (saved) {
+                try { assignments = JSON.parse(saved); } catch(e){ assignments = {}; }
+            } else { assignments = {}; }
+        }
+
+        function saveAssignments() {
+            localStorage.setItem(ASSIGNMENTS_KEY, JSON.stringify(assignments));
+        }
+
+        
         
         function crearNuevaSemana() {
             document.getElementById('newWeekModal').style.display = 'block';
+        }
+
+        function createEmptyWeek(name) {
+            const weekId = 'week_' + Date.now();
+            const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+            routines[weekId] = { name: name || ('Rutina ' + (Object.keys(routines).length + 1)), days: {} };
+            days.forEach(d => {
+                routines[weekId].days[d] = { dayName: d, exercises: [] };
+            });
+            currentWeekId = weekId;
+            saveData();
+            updateWeekSelector();
+            updateDaySelector();
+            renderDays();
         }
         
         function cerrarModal() {
@@ -571,6 +811,280 @@
             currentWeekId = document.getElementById('weekSelect').value;
             updateDaySelector();
             renderDays();
+            renderCalendar();
+        }
+
+        function deleteSelectedWeek() {
+            const weekId = document.getElementById('weekSelect').value;
+            if (!weekId) return alert('No hay rutina seleccionada');
+            deleteWeek(weekId);
+        }
+
+        function deleteWeek(weekId) {
+            if (!weekId || !routines[weekId]) return;
+            if (!confirm('¿Eliminar la rutina entera? Esta acción no se puede deshacer.')) return;
+
+            delete routines[weekId];
+
+            const remaining = Object.keys(routines);
+            currentWeekId = remaining.length ? remaining[0] : null;
+            saveData();
+            updateWeekSelector();
+            updateDaySelector();
+            renderDays();
+            renderCalendar();
+        }
+
+        function getWeekDates(reference = new Date()) {
+            // Return array of Date objects for Monday..Sunday of the week containing reference
+            const date = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate());
+            const day = date.getDay(); // 0 Sun - 6 Sat
+            // Calculate Monday
+            const diffToMonday = (day === 0) ? -6 : (1 - day);
+            const monday = new Date(date);
+            monday.setDate(date.getDate() + diffToMonday);
+
+            const days = [];
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(monday);
+                d.setDate(monday.getDate() + i);
+                days.push(d);
+            }
+            return days;
+        }
+
+        function getMonthWeeks(year, month) {
+            // month: 0-11
+            const firstOfMonth = new Date(year, month, 1);
+            // find Monday of the first week
+            let start = new Date(firstOfMonth);
+            const day = start.getDay();
+            const diffToMonday = (day === 0) ? -6 : (1 - day);
+            start.setDate(start.getDate() + diffToMonday);
+
+            const weeks = [];
+            let current = new Date(start);
+            while (true) {
+                const week = [];
+                for (let i = 0; i < 7; i++) {
+                    week.push(new Date(current));
+                    current.setDate(current.getDate() + 1);
+                }
+                weeks.push(week);
+                // stop after we've passed the last day of the month
+                if (current.getMonth() > month && current.getFullYear() === year) break;
+                if (current.getFullYear() > year) break;
+            }
+            return weeks;
+        }
+
+        function renderCalendar() {
+            const grid = document.getElementById('calendarGrid');
+            if (!grid) return;
+            // Render month view based on calendarYearOffset
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = now.getMonth() + calendarYearOffset;
+            // normalize year/month
+            const displayDate = new Date(year, month, 1);
+            const displayYear = displayDate.getFullYear();
+            const displayMonth = displayDate.getMonth();
+            const weeks = getMonthWeeks(displayYear, displayMonth);
+
+            // Update month title
+            const monthTitle = document.getElementById('monthTitle');
+            if (monthTitle) monthTitle.textContent = `Calendario — ${displayDate.toLocaleString('es-ES', {month:'long', year:'numeric'})}`;
+
+            // Build week selectors (assign routine per week)
+            const weekSelectors = document.getElementById('weekSelectors');
+            if (weekSelectors) {
+                weekSelectors.innerHTML = weeks.map(week => {
+                    const weekStart = week[0];
+                    const weekKey = `${weekStart.getFullYear()}-${String(weekStart.getMonth()+1).padStart(2,'0')}-${String(weekStart.getDate()).padStart(2,'0')}`;
+                    const assigned = assignments[weekKey] || '';
+                    const options = Object.keys(routines).map(wid => `<option value="${wid}" ${wid===assigned? 'selected':''}>${routines[wid].name}</option>`).join('');
+                    return `<div style="background:#fff;border:1px solid #eef2f6;padding:8px;border-radius:8px;display:flex;gap:8px;align-items:center;"> <div style="font-size:12px;color:#6b7280;font-weight:600">Semana ${weekStart.getDate()}/${weekStart.getMonth()+1}</div> <select onchange="assignRoutineToWeek('${weekKey}', this.value)"><option value="">(ninguna)</option>${options}</select> </div>`;
+                }).join('');
+            }
+
+            // render month grid cells (each week is a row of 7)
+            grid.innerHTML = weeks.map(week => {
+                return week.map((d, idx) => {
+                    const inMonth = d.getMonth() === displayMonth;
+                    const weekStart = week[0];
+                    const weekKey = `${weekStart.getFullYear()}-${String(weekStart.getMonth()+1).padStart(2,'0')}-${String(weekStart.getDate()).padStart(2,'0')}`;
+                    const assignedWeek = assignments[weekKey] || null;
+                    let badge = '';
+                    if (assignedWeek && routines[assignedWeek]) badge = `<div style="font-size:11px;color:#0f172a;opacity:0.9;margin-top:6px">${routines[assignedWeek].name}</div>`;
+
+                    const isToday = (function(){ const t=new Date(); return t.getFullYear()===d.getFullYear() && t.getMonth()===d.getMonth() && t.getDate()===d.getDate(); })();
+                    const classes = `calendar-day ${isToday ? 'today':''}`;
+                    return `<div class="${classes}" style="opacity:${inMonth?1:0.35};" onclick="openDayByDate(${d.getFullYear()},${d.getMonth()},${d.getDate()})"> <div class="date">${d.getDate()}</div> <div style="font-size:12px;color:#6b7280">${d.getDate()}/${d.getMonth()+1}</div> ${badge} </div>`;
+                }).join('');
+            }).join('');
+
+            // Update Today panel
+            const todayLabel = document.getElementById('todayLabel');
+            const todayInfo = document.getElementById('todayInfo');
+            if (todayLabel && todayInfo) {
+                const t = new Date();
+                todayLabel.textContent = `${t.toLocaleString('es-ES', {weekday:'long'})} — ${t.getDate()}/${t.getMonth()+1}/${t.getFullYear()}`;
+                // figure out assignment for today's week
+                const weeksThis = weeks;
+                const idx = weeksThis.findIndex(w => w.some(d=> d.getFullYear()===t.getFullYear() && d.getMonth()===t.getMonth() && d.getDate()===t.getDate()));
+                if (idx >= 0) {
+                    const wk = weeksThis[idx][0];
+                    const wkKey = `${wk.getFullYear()}-${String(wk.getMonth()+1).padStart(2,'0')}-${String(wk.getDate()).padStart(2,'0')}`;
+                    const assigned = assignments[wkKey];
+                    const todayExercisesEl = document.getElementById('todayExercises');
+                    if (assigned && routines[assigned]) {
+                        todayInfo.textContent = `Rutina: ${routines[assigned].name}`;
+
+                        // find today's index in that week
+                        const weekDates = weeksThis[idx];
+                        const t = new Date();
+                        const di = weekDates.findIndex(d=> d.getFullYear()===t.getFullYear() && d.getMonth()===t.getMonth() && d.getDate()===t.getDate());
+                        const dayKeys = Object.keys(routines[assigned].days);
+                        const dayKey = dayKeys[di] || dayKeys[0];
+                        const dayData = routines[assigned].days[dayKey];
+
+                        if (todayExercisesEl) {
+                            if (!dayData) {
+                                todayExercisesEl.innerHTML = '<div style="color:#6b7280">Sin datos para hoy</div>';
+                            } else if (dayData.isRest) {
+                                todayExercisesEl.innerHTML = '<div style="color:#065f46; font-weight:600">Hoy es día de descanso</div>';
+                            } else if (!dayData.exercises || dayData.exercises.length === 0) {
+                                todayExercisesEl.innerHTML = '<div style="color:#6b7280">Sin ejercicios programados</div>';
+                            } else {
+                                // render compact exercise cards
+                                const html = dayData.exercises.map(ex => {
+                                    const seriesHtml = ex.series.map(s => `<div class="today-series"><strong>S${s.number}:</strong> ${s.peso}kg × ${s.reps}${s.rir? ` (RIR ${s.rir})`:''}${s.nota? ` • ${s.nota}`: ''}</div>`).join('');
+                                    return `<div class="today-exercise-card"><h4>${ex.name} <span style="font-size:12px;color:#667eea; font-weight:600; margin-left:6px">${ex.muscleGroup}</span></h4>${seriesHtml}${ex.notes? `<div style="margin-top:6px;font-size:12px;color:#6b7280">📝 ${ex.notes}</div>` : ''}</div>`;
+                                }).join('');
+                                todayExercisesEl.innerHTML = html;
+                            }
+                        }
+                    } else {
+                        todayInfo.textContent = 'Sin rutina asignada';
+                        const todayExercisesEl = document.getElementById('todayExercises');
+                        if (todayExercisesEl) todayExercisesEl.innerHTML = '<div style="color:#6b7280">No hay rutina asignada para la semana de hoy</div>';
+                    }
+                } else {
+                    todayInfo.textContent = 'Sin información';
+                    const todayExercisesEl = document.getElementById('todayExercises');
+                    if (todayExercisesEl) todayExercisesEl.innerHTML = '';
+                }
+            }
+        }
+
+        function openToday() {
+            const dates = getWeekDates();
+            const today = new Date();
+            let idxToday = dates.findIndex(d => d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate());
+            if (idxToday < 0) idxToday = 0;
+            let dayKeys = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+            if (currentWeekId && routines[currentWeekId]) {
+                const keys = Object.keys(routines[currentWeekId].days);
+                if (keys.length === 7) dayKeys = keys;
+            }
+            const dayName = dayKeys[idxToday] || dayKeys[0];
+            openDayInUI(dayName);
+        }
+
+        function changeMonth(dir) {
+            calendarYearOffset += dir;
+            renderCalendar();
+        }
+
+        function assignRoutineToWeek(weekKey, weekId) {
+            if (!weekId) {
+                delete assignments[weekKey];
+            } else {
+                assignments[weekKey] = weekId;
+            }
+            saveAssignments();
+            renderCalendar();
+        }
+
+        function openDayByDate(y,m,d) {
+            // find day name within current selected routine by matching date index within displayed month weeks
+            const displayDate = new Date(new Date().getFullYear(), new Date().getMonth() + calendarYearOffset, 1);
+            const weeks = getMonthWeeks(displayDate.getFullYear(), displayDate.getMonth());
+            // find which week and index
+            for (let wi=0; wi<weeks.length; wi++) {
+                for (let di=0; di<7; di++) {
+                    const dt = weeks[wi][di];
+                    if (dt.getFullYear()===y && dt.getMonth()===m && dt.getDate()===d) {
+                        // day index di corresponds to a weekday slot; map to day key name for current routine
+                        if (!currentWeekId || !routines[currentWeekId]) return alert('Selecciona una rutina primero');
+                        const keys = Object.keys(routines[currentWeekId].days);
+                        const dayKey = keys[di] || keys[0];
+                        openDayInUI(dayKey);
+                        return;
+                    }
+                }
+            }
+        }
+
+        function openDayInUI(dayName) {
+            if (!currentWeekId) return alert('Selecciona una rutina primero');
+            // Open the full-day view for the selected day
+            openDayFullView(currentWeekId, encodeURIComponent(dayName));
+        }
+
+        function renameDay(weekId, encodedOldKey) {
+            try {
+                const oldKey = decodeURIComponent(encodedOldKey);
+                const newName = prompt('Nuevo nombre para el día:', routines[weekId].days[oldKey].dayName || oldKey);
+                if (newName === null) return; // cancel
+                const trimmed = newName.trim();
+                if (!trimmed) return alert('El nombre no puede estar vacío');
+
+                // If same name, nothing to do
+                if (trimmed === oldKey) return;
+
+                // If key collision with another existing key, disallow
+                if (routines[weekId].days[trimmed]) return alert('Ya existe un día con ese nombre');
+
+                // Rebuild the days object preserving original order but replacing the key at the same index
+                const daysObj = routines[weekId].days;
+                const keys = Object.keys(daysObj);
+                const newDays = {};
+                for (let i=0;i<keys.length;i++) {
+                    const k = keys[i];
+                    if (k === oldKey) {
+                        const obj = daysObj[k];
+                        obj.dayName = trimmed;
+                        newDays[trimmed] = obj;
+                    } else {
+                        newDays[k] = daysObj[k];
+                    }
+                }
+                routines[weekId].days = newDays;
+
+                saveData();
+                updateDaySelector();
+                renderDays();
+                renderCalendar();
+            } catch (e) {
+                console.error(e);
+                alert('Error renombrando el día');
+            }
+        }
+
+        function toggleRest(weekId, encodedDayKey) {
+            try {
+                const dayKey = decodeURIComponent(encodedDayKey);
+                if (!routines[weekId] || !routines[weekId].days[dayKey]) return;
+                const dayObj = routines[weekId].days[dayKey];
+                dayObj.isRest = !dayObj.isRest;
+                saveData();
+                renderDays();
+                renderCalendar();
+            } catch (e) {
+                console.error(e);
+                alert('Error al marcar descanso');
+            }
         }
         
         function updateWeekSelector() {
@@ -616,6 +1130,40 @@
             `;
             container.insertAdjacentHTML('beforeend', serieHTML);
         }
+
+        // Edit modal series helpers
+        function addEditSerie() {
+            const container = document.getElementById('editSeriesContainer');
+            const serieIndex = container.children.length;
+            const serieHTML = `
+                <div class="serie-item edit-serie-item" id="edit-serie-${serieIndex}">
+                    <input type="number" placeholder="Peso (kg)" class="edit-serie-peso" step="any" min="0">
+                    <input type="number" placeholder="Reps" class="edit-serie-reps" step="1" min="1">
+                    <input type="number" placeholder="RIR" class="edit-serie-rir" step="0.5" min="0" max="10">
+                    <input type="text" placeholder="Nota" class="edit-serie-nota" maxlength="20">
+                    <button type="button" class="remove-serie" onclick="removeEditSerie('edit-serie-${serieIndex}')">✕</button>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', serieHTML);
+        }
+
+        function removeEditSerie(id) {
+            const element = document.getElementById(id);
+            if (element) element.remove();
+        }
+
+        function getEditSeriesData() {
+            const serieItems = document.querySelectorAll('.edit-serie-item');
+            const series = [];
+            serieItems.forEach((item, index) => {
+                const peso = parseFloat(item.querySelector('.edit-serie-peso').value) || 0;
+                const reps = parseInt(item.querySelector('.edit-serie-reps').value) || 0;
+                if (peso > 0 || reps > 0) {
+                    series.push({ number: index+1, peso: peso, reps: reps, rir: parseFloat(item.querySelector('.edit-serie-rir').value) || 0, nota: item.querySelector('.edit-serie-nota').value || '' });
+                }
+            });
+            return series;
+        }
         
         function removeSerie(id) {
             const element = document.getElementById(id);
@@ -655,7 +1203,6 @@
             
             const day = document.getElementById('trainingDay').value;
             const name = document.getElementById('exerciseName').value;
-            const muscleGroup = document.getElementById('muscleGroup').value;
             const notes = document.getElementById('exerciseNotes').value;
             const series = getSeriesData();
             
@@ -676,7 +1223,7 @@
             const exercise = {
                 id: Date.now(),
                 name: name,
-                muscleGroup: muscleGroup,
+                muscleGroup: '',
                 notes: notes,
                 series: series
             };
@@ -706,10 +1253,12 @@
                     const dayData = routine.days[dayKey];
                     const dayName = dayData.dayName;
                     const exercises = dayData.exercises || [];
+                    const isRest = !!dayData.isRest;
+                    const restBadge = isRest ? `<span style="background:#d1fae5;color:#065f46;padding:4px 8px;border-radius:999px;font-size:12px;margin-left:8px">Descanso</span>` : '';
                     
                     const exercisesHTML = exercises.length === 0 
                         ? '<div class="no-exercises">Sin ejercicios</div>'
-                        : exercises.map(ex => {
+                                : exercises.map(ex => {
                             const seriesHTML = ex.series.map(s => 
                                 `<div class="series-info">
                                     <strong>S${s.number}:</strong> ${s.peso}kg × ${s.reps}${s.rir > 0 ? ` (RIR: ${s.rir})` : ''}${s.nota ? ` • ${s.nota}` : ''}
@@ -723,7 +1272,8 @@
                                     ${seriesHTML}
                                     ${ex.notes ? `<div class="exercise-notes">📝 ${ex.notes}</div>` : ''}
                                     <div class="exercise-actions">
-                                        <button class="delete-btn" onclick="deleteExercise('${weekId}', '${dayKey}', ${ex.id})">Eliminar</button>
+                                                <button class="edit-day-btn" onclick="openEditExercise('${weekId}', '${dayKey}', ${ex.id})">Editar</button>
+                                                <button class="delete-btn" onclick="deleteExercise('${weekId}', '${dayKey}', ${ex.id})">Eliminar</button>
                                     </div>
                                 </div>
                             `;
@@ -731,11 +1281,16 @@
                     
                     return `
                         <div class="day-item">
-                            <div class="day-item-header" onclick="toggleDay(this)">
-                                <div>
+                                    <div class="day-item-header" id="day-${weekId}-${encodeURIComponent(dayKey)}" onclick="openDayFullView('${weekId}','${encodeURIComponent(dayKey)}')">
+                                <div style="display:flex; align-items:center; gap:8px;">
                                     <span class="day-toggle">▶</span>
                                     <span>${dayName}</span>
+                                    ${restBadge}
                                     <span class="day-item-count"> (${exercises.length})</span>
+                                </div>
+                                <div>
+                                    <button class="edit-day-btn" onclick="event.stopPropagation(); renameDay('${weekId}', '${encodeURIComponent(dayKey)}')">✎</button>
+                                    <button class="edit-day-btn" style="margin-left:6px; color:#065f46;" onclick="event.stopPropagation(); toggleRest('${weekId}','${encodeURIComponent(dayKey)}')">🛌</button>
                                 </div>
                             </div>
                             <div class="day-item-content">
@@ -760,6 +1315,7 @@
                     </div>
                 `;
             }).join('');
+            
         }
         
         function toggleRoutine(header, weekId) {
@@ -777,6 +1333,52 @@
             content.classList.toggle('expanded');
             toggle.textContent = content.classList.contains('expanded') ? '▼' : '▶';
         }
+
+        function openDayFullView(weekId, encodedDayKey) {
+            const dayKey = decodeURIComponent(encodedDayKey);
+            if (!routines[weekId] || !routines[weekId].days[dayKey]) return alert('Día no encontrado');
+            const routine = routines[weekId];
+            const dayObj = routine.days[dayKey];
+
+            // hide main grid and show full view
+            const main = document.querySelector('.main-grid');
+            if (main) main.style.display = 'none';
+            const view = document.getElementById('dayFullView');
+            view.style.display = 'block';
+            document.getElementById('dayFullTitle').textContent = `${routine.name} — ${dayObj.dayName}`;
+
+            const exContainer = document.getElementById('dayFullExercises');
+            const exercises = dayObj.exercises || [];
+            if (!exercises.length) {
+                exContainer.innerHTML = '<div class="no-exercises">Sin ejercicios</div>';
+                return;
+            }
+
+            exContainer.innerHTML = exercises.map(ex => {
+                const seriesHtml = ex.series.map(s => `<div class="series-info"><strong>S${s.number}:</strong> ${s.peso}kg × ${s.reps}${s.rir>0?` (RIR: ${s.rir})`:''}${s.nota?` • ${s.nota}`:''}</div>`).join('');
+                return `
+                    <div class="exercise-card" style="margin-bottom:12px;padding:14px;">
+                        <h2 style="margin:0 0 8px 0; font-size:18px">${ex.name}</h2>
+                        ${seriesHtml}
+                        ${ex.notes? `<div class="exercise-notes" style="margin-top:8px">📝 ${ex.notes}</div>`: ''}
+                        <div style="margin-top:10px">
+                            <button class="edit-day-btn" onclick="openEditExercise('${weekId}','${dayKey}', ${ex.id})">Editar</button>
+                            <button class="delete-btn" onclick="deleteExercise('${weekId}','${dayKey}', ${ex.id})">Eliminar</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function closeDayFullView() {
+            const main = document.querySelector('.main-grid');
+            if (main) main.style.display = '';
+            const view = document.getElementById('dayFullView');
+            if (view) view.style.display = 'none';
+            // optional: re-render to ensure state is consistent
+            renderDays();
+            renderCalendar();
+        }
         
         function deleteExercise(weekId, dayKey, exerciseId) {
             if (confirm('¿Eliminar este ejercicio?')) {
@@ -784,6 +1386,85 @@
                     routines[weekId].days[dayKey].exercises.filter(e => e.id !== exerciseId);
                 saveData();
                 renderDays();
+            }
+        }
+
+        // Edit exercise modal logic
+        let _editContext = { weekId: null, dayKey: null, exerciseId: null };
+
+        function openEditExercise(weekId, dayKey, exerciseId) {
+            try {
+                const day = dayKey;
+                const exercise = (routines[weekId] && routines[weekId].days[day]) ? routines[weekId].days[day].exercises.find(e => e.id === exerciseId) : null;
+                if (!exercise) return alert('Ejercicio no encontrado');
+
+                _editContext = { weekId, dayKey: day, exerciseId };
+
+                document.getElementById('editExerciseName').value = exercise.name || '';
+                document.getElementById('editMuscleGroup').value = exercise.muscleGroup || '';
+                document.getElementById('editExerciseNotes').value = exercise.notes || '';
+
+                // populate series
+                const container = document.getElementById('editSeriesContainer');
+                container.innerHTML = '';
+                if (exercise.series && exercise.series.length) {
+                    exercise.series.forEach((s, idx) => {
+                        const html = `
+                            <div class="serie-item edit-serie-item" id="edit-serie-${idx}">
+                                <input type="number" placeholder="Peso (kg)" class="edit-serie-peso" step="any" min="0" value="${s.peso}">
+                                <input type="number" placeholder="Reps" class="edit-serie-reps" step="1" min="1" value="${s.reps}">
+                                <input type="number" placeholder="RIR" class="edit-serie-rir" step="0.5" min="0" max="10" value="${s.rir}">
+                                <input type="text" placeholder="Nota" class="edit-serie-nota" maxlength="20" value="${s.nota || ''}">
+                                <button type="button" class="remove-serie" onclick="removeEditSerie('edit-serie-${idx}')">✕</button>
+                            </div>
+                        `;
+                        container.insertAdjacentHTML('beforeend', html);
+                    });
+                } else {
+                    addEditSerie();
+                }
+
+                document.getElementById('editExerciseModal').style.display = 'block';
+            } catch (e) {
+                console.error(e);
+                alert('Error abriendo editor');
+            }
+        }
+
+        function closeEditModal() {
+            document.getElementById('editExerciseModal').style.display = 'none';
+            _editContext = { weekId: null, dayKey: null, exerciseId: null };
+        }
+
+        function saveEditedExercise() {
+            try {
+                const name = document.getElementById('editExerciseName').value.trim();
+                if (!name) return alert('El nombre del ejercicio es obligatorio');
+                const muscleGroup = document.getElementById('editMuscleGroup').value || '';
+                const notes = document.getElementById('editExerciseNotes').value || '';
+                const series = getEditSeriesData();
+
+                if (series.length === 0) return alert('Añade al menos una serie con peso o reps');
+
+                const { weekId, dayKey, exerciseId } = _editContext;
+                const dayObj = routines[weekId] && routines[weekId].days[dayKey];
+                if (!dayObj) return alert('Contexto inválido');
+
+                const exIndex = dayObj.exercises.findIndex(e => e.id === exerciseId);
+                if (exIndex === -1) return alert('Ejercicio no encontrado');
+
+                dayObj.exercises[exIndex].name = name;
+                dayObj.exercises[exIndex].muscleGroup = muscleGroup;
+                dayObj.exercises[exIndex].notes = notes;
+                dayObj.exercises[exIndex].series = series.map((s, i) => ({ ...s, number: i+1 }));
+
+                saveData();
+                renderDays();
+                renderCalendar();
+                closeEditModal();
+            } catch (e) {
+                console.error(e);
+                alert('Error guardando ejercicio');
             }
         }
         
@@ -800,6 +1481,7 @@
             updateDaySelector();
             addSerie();
             renderDays();
+            renderCalendar();
         }
         
         init();

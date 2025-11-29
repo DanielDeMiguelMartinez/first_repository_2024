@@ -1,0 +1,5 @@
+# Ignore Actions Runner binary files
+actions-runner/*.zip
+
+# Optional: keep the folder but not the binaries
+actions-runner/**/work/*
