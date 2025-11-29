@@ -631,19 +631,7 @@
         </div>
     </div>
     
-    <div id="newWeekModal" class="modal">
-        <div class="modal-content">
-            <h2>Nueva Rutina Semanal</h2>
-            <div class="form-group">
-                <label for="newWeekName">Nombre de la rutina</label>
-                <input type="text" id="newWeekName" placeholder="Ej: Rutina A">
-            </div>
-            <div class="modal-buttons">
-                <button onclick="guardarNuevaSemana()">Crear</button>
-                <button class="close-modal" onclick="cerrarModal()">Cancelar</button>
-            </div>
-        </div>
-    </div>
+    
 
             <div id="editExerciseModal" class="modal">
                 <div class="modal-content">
@@ -753,10 +741,6 @@
 
         
         
-        function crearNuevaSemana() {
-            document.getElementById('newWeekModal').style.display = 'block';
-        }
-
         function createEmptyWeek(name) {
             const weekId = 'week_' + Date.now();
             const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
@@ -766,40 +750,6 @@
             });
             currentWeekId = weekId;
             saveData();
-            updateWeekSelector();
-            updateDaySelector();
-            renderDays();
-        }
-        
-        function cerrarModal() {
-            document.getElementById('newWeekModal').style.display = 'none';
-        }
-        
-        function guardarNuevaSemana() {
-            const name = document.getElementById('newWeekName').value.trim();
-            if (!name) {
-                alert('Ingresa un nombre para la rutina');
-                return;
-            }
-            
-            const weekId = 'week_' + Date.now();
-            const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
-            
-            routines[weekId] = {
-                name: name,
-                days: {}
-            };
-            
-            days.forEach(day => {
-                routines[weekId].days[day] = {
-                    dayName: day,
-                    exercises: []
-                };
-            });
-            
-            currentWeekId = weekId;
-            saveData();
-            document.getElementById('newWeekName').value = '';
             cerrarModal();
             updateWeekSelector();
             updateDaySelector();
