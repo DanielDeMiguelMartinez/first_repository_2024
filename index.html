@@ -124,33 +124,35 @@
         /* Back button for full-day view */
         .back-btn {
             position: fixed;
-            left: 16px;
-            top: 16px;
+            left: 12px;
+            top: 12px;
             z-index: 1400;
-            padding: 10px 14px;
-            border-radius: 12px;
-            background: #2563eb; /* blue */
+            padding: 12px 16px;
+            border-radius: 14px;
+            background: #ef4444; /* red - more visible */
             color: #fff;
             border: none;
-            box-shadow: 0 12px 30px rgba(37,99,235,0.18);
+            box-shadow: 0 14px 40px rgba(239,68,68,0.22);
             font-weight: 700;
             cursor: pointer;
             display: inline-flex;
             align-items: center;
-            gap: 10px;
-            font-size: 16px;
+            gap: 12px;
+            font-size: 17px;
         }
 
         .back-btn svg {
-            width: 22px;
-            height: 22px;
+            width: 26px;
+            height: 26px;
             display: block;
             stroke: currentColor;
+            stroke-width: 2.5;
         }
 
         .back-btn:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 16px 36px rgba(37,99,235,0.22);
+            transform: translateY(-2px);
+            box-shadow: 0 18px 48px rgba(239,68,68,0.28);
+            background: #dc2626;
         }
         
         label {
@@ -1230,9 +1232,9 @@
                     
                     return `
                         <div class="day-item">
-                                    <div class="day-item-header" id="day-${weekId}-${encodeURIComponent(dayKey)}" onclick="openDayFullView('${weekId}','${encodeURIComponent(dayKey)}')">
+                                    <div class="day-item-header" id="day-${weekId}-${encodeURIComponent(dayKey)}" onclick="if(!event.target.classList.contains('day-toggle')) openDayFullView('${weekId}','${encodeURIComponent(dayKey)}')">
                                 <div style="display:flex; align-items:center; gap:8px;">
-                                    <span class="day-toggle">▶</span>
+                                    <span class="day-toggle" onclick="event.stopPropagation(); toggleDay(this.closest('.day-item-header').nextElementSibling); this.textContent = this.closest('.day-item-header').nextElementSibling.classList.contains('expanded') ? '▼' : '▶';" style="cursor:pointer;">▶</span>
                                     <span>${dayName}</span>
                                     ${restBadge}
                                     <span class="day-item-count"> (${exercises.length})</span>
