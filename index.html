@@ -21,6 +21,12 @@
 	.center-ui{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:21;text-align:center}
 	.title{font-size:22px;margin-bottom:8px}
 	.subtitle{color:#cbd5e1;margin-bottom:14px}
+	.controls-instructions{display:flex;gap:14px;justify-content:center;margin-top:8px}
+	.control-btn{display:flex;flex-direction:column;align-items:center;gap:8px;background:rgba(255,255,255,0.03);padding:12px 16px;border-radius:12px;border:1px solid rgba(255,255,255,0.04)}
+	.control-icon{width:64px;height:64px;border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,0.03),rgba(0,0,0,0.06));display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--accent)}
+	.control-label{font-size:14px;color:#e6eef8}
+	.control-hint{font-size:12px;color:#9fb0c8}
+	.crosshair{position:fixed;left:0;top:0;pointer-events:none;z-index:999}
 	.crosshair{position:absolute;left:0;top:0;pointer-events:none;z-index:30}
 	footer{margin-top:12px;color:#9ca3af;font-size:13px}
 </style>
@@ -44,8 +50,21 @@
 			<!-- optional overlay content -->
 		</div>
 		<div class="center-ui" id="centerUI">
-			<div class="title">Pulsa <strong>Comenzar</strong> para jugar</div>
-			<div class="subtitle">Haz clic con el ratón para disparar a los objetivos en movimiento</div>
+			<div class="title">Controles</div>
+			<div class="subtitle">Usa el ratón para apuntar y el clic izquierdo para disparar</div>
+			<div class="controls-instructions">
+				<div class="control-btn">
+					<div class="control-icon">🖱️</div>
+					<div class="control-label">Apuntar</div>
+					<div class="control-hint">Mover ratón</div>
+				</div>
+				<div class="control-btn">
+					<div class="control-icon">🔫</div>
+					<div class="control-label">Disparar</div>
+					<div class="control-hint">Clic izquierdo</div>
+				</div>
+			</div>
+			<div style="margin-top:14px"><button id="centerStartBtn">Comenzar</button></div>
 		</div>
 		<svg class="crosshair" id="crosshair" width="40" height="40" viewBox="0 0 40 40">
 			<circle cx="20" cy="20" r="10" stroke="#ffffff" stroke-width="2" fill="rgba(255,255,255,0.04)"></circle>
@@ -68,6 +87,7 @@
 	const scoreBox = document.getElementById('scoreBox');
 	const livesBox = document.getElementById('livesBox');
 	const levelBox = document.getElementById('levelBox');
+	const centerStartBtn = document.getElementById('centerStartBtn');
 
 	let w = canvas.width = Math.min(window.innerWidth-60, 1000);
 	let h = canvas.height = Math.min(window.innerHeight-200, 700);
@@ -220,17 +240,22 @@
 		lives -= 0.25; if(lives < 0) lives = 0; updateHUD(); if(lives<=0) endGame();
 	});
 
-	// crosshair follow
+	// crosshair follow: show only when over canvas, center on cursor
+	cross.style.display = 'none';
+	canvas.addEventListener('mouseenter', ()=>{ cross.style.display = 'block'; });
+	canvas.addEventListener('mouseleave', ()=>{ cross.style.display = 'none'; });
 	window.addEventListener('mousemove',(e)=>{
-		const rect = canvas.getBoundingClientRect();
-		const cx = e.clientX - rect.left - 20; const cy = e.clientY - rect.top - 20;
-		cross.style.left = (rect.left + cx + 12) + 'px';
-		cross.style.top = (rect.top + cy + 12) + 'px';
+		// position crosshair centered on pointer
+		const cx = e.clientX - 20; const cy = e.clientY - 20;
+		cross.style.left = cx + 'px';
+		cross.style.top = cy + 'px';
 	});
 
 	startBtn.addEventListener('click', ()=>{
 		startGame();
 	});
+	// center start button (in overlay)
+	if(centerStartBtn) centerStartBtn.addEventListener('click', ()=>{ startGame(); });
 	pauseBtn.addEventListener('click', ()=>{
 		paused = !paused; pauseBtn.textContent = paused ? 'Reanudar' : 'Pausa';
 	});
