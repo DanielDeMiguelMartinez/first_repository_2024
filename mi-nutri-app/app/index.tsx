@@ -3,6 +3,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import { signalMealSaved, subscribeMealUpdates } from "./services/refreshSignal";
 import {
+  ActivityIndicator,
   Alert,
   Modal,
   PanResponder,
@@ -17,6 +18,7 @@ import {
   View
 } from "react-native";
 import { useApp } from "./services/i18n";
+import { buscarPlatosRestaurante, ResultadoRestaurante } from "./services/comerFuera";
 import { supabase } from "./services/supabase";
 
 type Porcion = { nombre: string; gramos: number };
@@ -69,53 +71,7 @@ const DIAS_ZH = ["一","二","三","四","五","六","日"];
 
 const EMPTY_MEALS: MealData = { desayuno: [], comida: [], merienda: [], cena: [] };
 
-// ── Platos de restaurante ──────────────────────────────────────────────────────
-type PlatoRapido = {
-  nombre: string; icono: string; categoria: string;
-  calorias: number; proteinas: number; carbs: number; grasas: number; nota?: string;
-};
-const PLATOS_RESTAURANTE: PlatoRapido[] = [
-  // Española
-  { nombre: "Menú del día (completo)", icono: "🍽️", categoria: "Española", calorias: 900, proteinas: 42, carbs: 95, grasas: 34, nota: "Primer + segundo + postre" },
-  { nombre: "Paella mixta (ración)", icono: "🥘", categoria: "Española", calorias: 620, proteinas: 28, carbs: 80, grasas: 18 },
-  { nombre: "Tortilla española", icono: "🍳", categoria: "Española", calorias: 340, proteinas: 16, carbs: 22, grasas: 20 },
-  { nombre: "Croquetas (6 uds)", icono: "🟡", categoria: "Española", calorias: 480, proteinas: 14, carbs: 42, grasas: 28 },
-  { nombre: "Gazpacho (bol)", icono: "🍅", categoria: "Española", calorias: 90, proteinas: 2, carbs: 12, grasas: 4 },
-  { nombre: "Cocido madrileño", icono: "🫕", categoria: "Española", calorias: 720, proteinas: 45, carbs: 55, grasas: 28 },
-  { nombre: "Pulpo a la gallega", icono: "🐙", categoria: "Española", calorias: 280, proteinas: 24, carbs: 18, grasas: 12 },
-  { nombre: "Gambas al ajillo", icono: "🦐", categoria: "Española", calorias: 240, proteinas: 20, carbs: 4, grasas: 16 },
-  { nombre: "Ensalada mixta", icono: "🥗", categoria: "Española", calorias: 150, proteinas: 5, carbs: 10, grasas: 10 },
-  { nombre: "Bocadillo mixto", icono: "🥪", categoria: "Española", calorias: 420, proteinas: 18, carbs: 46, grasas: 18 },
-  // Rápida
-  { nombre: "Hamburguesa simple", icono: "🍔", categoria: "Rápida", calorias: 450, proteinas: 22, carbs: 38, grasas: 22 },
-  { nombre: "Hamburguesa doble queso", icono: "🍔", categoria: "Rápida", calorias: 700, proteinas: 38, carbs: 44, grasas: 38 },
-  { nombre: "Menú hamburguesa + patatas", icono: "🍟", categoria: "Rápida", calorias: 950, proteinas: 32, carbs: 108, grasas: 42 },
-  { nombre: "Kebab en pan de pita", icono: "🌮", categoria: "Rápida", calorias: 650, proteinas: 30, carbs: 58, grasas: 28 },
-  { nombre: "Pizza margarita (2 porciones)", icono: "🍕", categoria: "Rápida", calorias: 540, proteinas: 20, carbs: 68, grasas: 20 },
-  { nombre: "Bocadillo de calamares", icono: "🦑", categoria: "Rápida", calorias: 520, proteinas: 18, carbs: 56, grasas: 24 },
-  { nombre: "Perrito caliente", icono: "🌭", categoria: "Rápida", calorias: 380, proteinas: 14, carbs: 34, grasas: 20 },
-  // Italiana
-  { nombre: "Pasta boloñesa", icono: "🍝", categoria: "Italiana", calorias: 580, proteinas: 28, carbs: 72, grasas: 18 },
-  { nombre: "Pasta carbonara", icono: "🍝", categoria: "Italiana", calorias: 700, proteinas: 24, carbs: 74, grasas: 32 },
-  { nombre: "Pizza 4 quesos (2 porciones)", icono: "🍕", categoria: "Italiana", calorias: 640, proteinas: 26, carbs: 64, grasas: 30 },
-  { nombre: "Lasaña (ración)", icono: "🫙", categoria: "Italiana", calorias: 520, proteinas: 24, carbs: 52, grasas: 24 },
-  { nombre: "Risotto (ración)", icono: "🍚", categoria: "Italiana", calorias: 500, proteinas: 14, carbs: 72, grasas: 16 },
-  // Saludable
-  { nombre: "Pollo a la plancha", icono: "🍗", categoria: "Saludable", calorias: 280, proteinas: 42, carbs: 2, grasas: 10 },
-  { nombre: "Salmón a la plancha", icono: "🐟", categoria: "Saludable", calorias: 320, proteinas: 36, carbs: 0, grasas: 18 },
-  { nombre: "Merluza al horno", icono: "🐠", categoria: "Saludable", calorias: 200, proteinas: 32, carbs: 4, grasas: 6 },
-  { nombre: "Ensalada César con pollo", icono: "🥗", categoria: "Saludable", calorias: 380, proteinas: 28, carbs: 18, grasas: 22 },
-  { nombre: "Verduras a la brasa", icono: "🥦", categoria: "Saludable", calorias: 140, proteinas: 6, carbs: 20, grasas: 6 },
-  { nombre: "Pechuga de pavo a la plancha", icono: "🍖", categoria: "Saludable", calorias: 240, proteinas: 38, carbs: 0, grasas: 8 },
-  // Carnes
-  { nombre: "Filete de ternera (200g)", icono: "🥩", categoria: "Carnes", calorias: 360, proteinas: 42, carbs: 0, grasas: 20 },
-  { nombre: "Chuleta de cerdo", icono: "🥩", categoria: "Carnes", calorias: 340, proteinas: 34, carbs: 0, grasas: 22 },
-  { nombre: "Costillas BBQ (ración)", icono: "🍖", categoria: "Carnes", calorias: 680, proteinas: 40, carbs: 24, grasas: 42 },
-  { nombre: "Pollo asado (1/4)", icono: "🍗", categoria: "Carnes", calorias: 380, proteinas: 36, carbs: 2, grasas: 24 },
-  { nombre: "Entrecot (250g)", icono: "🥩", categoria: "Carnes", calorias: 480, proteinas: 52, carbs: 0, grasas: 30 },
-];
-const CATEGORIAS_RESTAURANTE = ["Todas", "Española", "Rápida", "Italiana", "Saludable", "Carnes"];
-const CAT_ICONOS: Record<string, string> = { Todas: "🍽️", Española: "🇪🇸", Rápida: "🍔", Italiana: "🇮🇹", Saludable: "🥗", Carnes: "🥩" };
+const QUICK_SEARCHES = ["paella", "pizza margherita", "hamburguesa", "tortilla española", "salmón plancha", "ensalada césar"];
 
 function dateToKey(date: Date): string {
   const y = date.getFullYear();
@@ -528,8 +484,10 @@ export default function HomeScreen() {
   const [showDuplicarCalendario, setShowDuplicarCalendario] = useState(false);
   const [duplicarComidaKey, setDuplicarComidaKey] = useState<keyof MealData | null>(null);
   const [showComerFuera, setShowComerFuera] = useState(false);
-  const [catComerFuera, setCatComerFuera] = useState("Todas");
-  const [platoParaAnadir, setPlatoParaAnadir] = useState<PlatoRapido | null>(null);
+  const [queryRestaurante, setQueryRestaurante] = useState("");
+  const [loadingRestaurante, setLoadingRestaurante] = useState(false);
+  const [resultadosRestaurante, setResultadosRestaurante] = useState<ResultadoRestaurante[]>([]);
+  const [platoParaAnadir, setPlatoParaAnadir] = useState<ResultadoRestaurante | null>(null);
   const [mealComerFuera, setMealComerFuera] = useState<keyof MealData>("comida");
 
   const isToday = isSameDay(currentDate, new Date());
@@ -689,7 +647,16 @@ export default function HomeScreen() {
     setDuplicarComidaKey(null);
   };
 
-  const anadirPlatoRapido = async (plato: PlatoRapido, meal: keyof MealData) => {
+  const buscarEnRestaurante = async (q: string) => {
+    if (!q.trim()) return;
+    setLoadingRestaurante(true);
+    setResultadosRestaurante([]);
+    const r = await buscarPlatosRestaurante(q.trim());
+    setResultadosRestaurante(r);
+    setLoadingRestaurante(false);
+  };
+
+  const anadirPlatoRapido = async (plato: ResultadoRestaurante, meal: keyof MealData) => {
     try {
       const key = dateToKey(currentDate);
       const stored = await AsyncStorage.getItem(key);
@@ -698,8 +665,8 @@ export default function HomeScreen() {
       const entrada = {
         id: Date.now().toString(),
         name: plato.nombre,
-        brand: "Restaurante",
-        supermercado: plato.categoria,
+        brand: plato.fuente,
+        supermercado: "Restaurante",
         calories: plato.calorias,
         protein: plato.proteinas,
         carbs: plato.carbs,
@@ -1005,7 +972,7 @@ export default function HomeScreen() {
               <Text style={{ fontSize: 22 }}>🍽️</Text>
               <View>
                 <Text style={s.comerFueraTitulo}>Comer Fuera</Text>
-                <Text style={s.comerFueraSub}>Estimaciones rápidas de restaurante</Text>
+                <Text style={s.comerFueraSub}>Busca platos en FatSecret y Nutritionix</Text>
               </View>
             </View>
             <Text style={s.comerFueraChevron}>{showComerFuera ? "▲" : "▼"}</Text>
@@ -1013,51 +980,85 @@ export default function HomeScreen() {
 
           {showComerFuera && (
             <View style={s.comerFueraBody}>
-              {/* Categorías */}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }} contentContainerStyle={{ gap: 6, paddingVertical: 2 }}>
-                {CATEGORIAS_RESTAURANTE.map(cat => (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[s.catChip, catComerFuera === cat && s.catChipActive]}
-                    onPress={() => setCatComerFuera(cat)}
-                  >
-                    <Text style={{ fontSize: 13 }}>{CAT_ICONOS[cat]}</Text>
-                    <Text style={[s.catChipText, catComerFuera === cat && s.catChipTextActive]}>{cat}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+              {/* Búsqueda */}
+              <View style={{ flexDirection: "row", gap: 8, marginBottom: 10 }}>
+                <TextInput
+                  style={[s.comerFueraSearch, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder, color: colors.text }]}
+                  value={queryRestaurante}
+                  onChangeText={setQueryRestaurante}
+                  placeholder="Ej: paella, hamburguesa, salmón…"
+                  placeholderTextColor={colors.textMuted}
+                  returnKeyType="search"
+                  onSubmitEditing={() => buscarEnRestaurante(queryRestaurante)}
+                />
+                <TouchableOpacity
+                  style={{ backgroundColor: "#1F6FEB", borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", opacity: !queryRestaurante.trim() || loadingRestaurante ? 0.4 : 1 }}
+                  onPress={() => buscarEnRestaurante(queryRestaurante)}
+                  disabled={!queryRestaurante.trim() || loadingRestaurante}
+                >
+                  <Text style={{ fontSize: 16 }}>🔍</Text>
+                </TouchableOpacity>
+              </View>
 
-              {/* Platos */}
-              {PLATOS_RESTAURANTE.filter(p => catComerFuera === "Todas" || p.categoria === catComerFuera).map((plato, i) => (
+              {/* Chips de búsqueda rápida */}
+              {!loadingRestaurante && resultadosRestaurante.length === 0 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }} contentContainerStyle={{ gap: 6 }}>
+                  {QUICK_SEARCHES.map(q => (
+                    <TouchableOpacity
+                      key={q}
+                      style={s.catChip}
+                      onPress={() => { setQueryRestaurante(q); buscarEnRestaurante(q); }}
+                    >
+                      <Text style={s.catChipText}>{q}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+
+              {/* Cargando */}
+              {loadingRestaurante && (
+                <View style={{ paddingVertical: 24, alignItems: "center", gap: 8 }}>
+                  <ActivityIndicator color="#1F6FEB" />
+                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>Buscando en FatSecret y Nutritionix…</Text>
+                </View>
+              )}
+
+              {/* Resultados */}
+              {resultadosRestaurante.map((plato, i) => (
                 <TouchableOpacity
                   key={i}
                   style={s.platoRow}
                   onPress={() => { setPlatoParaAnadir(plato); setMealComerFuera("comida"); }}
                   activeOpacity={0.75}
                 >
-                  <View style={s.platoLeft}>
-                    <Text style={{ fontSize: 20 }}>{plato.icono}</Text>
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.platoNombre} numberOfLines={1}>{plato.nombre}</Text>
-                      {plato.nota && <Text style={s.platoNota}>{plato.nota}</Text>}
-                      <View style={s.platoMacros}>
-                        <Text style={[s.platoMacroVal, { color: "#60A5FA" }]}>{plato.proteinas}g P</Text>
-                        <Text style={s.platoMacroDot}>·</Text>
-                        <Text style={[s.platoMacroVal, { color: "#FBBF24" }]}>{plato.carbs}g C</Text>
-                        <Text style={s.platoMacroDot}>·</Text>
-                        <Text style={[s.platoMacroVal, { color: "#F87171" }]}>{plato.grasas}g G</Text>
-                      </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.platoNombre} numberOfLines={1}>{plato.nombre}</Text>
+                    <View style={s.platoMacros}>
+                      <Text style={[s.platoMacroVal, { color: "#60A5FA" }]}>{plato.proteinas}g P</Text>
+                      <Text style={s.platoMacroDot}>·</Text>
+                      <Text style={[s.platoMacroVal, { color: "#FBBF24" }]}>{plato.carbs}g C</Text>
+                      <Text style={s.platoMacroDot}>·</Text>
+                      <Text style={[s.platoMacroVal, { color: "#F87171" }]}>{plato.grasas}g G</Text>
+                      {plato.porcion ? <><Text style={s.platoMacroDot}>·</Text><Text style={[s.platoMacroVal, { color: colors.textMuted }]}>{plato.porcion}</Text></> : null}
                     </View>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>{plato.fuente}</Text>
                   </View>
                   <View style={s.platoRight}>
-                    <Text style={s.platoCal}>~{plato.calorias}</Text>
+                    <Text style={s.platoCal}>{plato.calorias}</Text>
                     <Text style={s.platoCalLabel}>kcal</Text>
                   </View>
                 </TouchableOpacity>
               ))}
 
+              {/* Sin resultados */}
+              {!loadingRestaurante && resultadosRestaurante.length === 0 && queryRestaurante.trim() !== "" && (
+                <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: "center", paddingVertical: 12 }}>
+                  Sin resultados. Prueba en inglés o con otro nombre.
+                </Text>
+              )}
+
               <Text style={s.comerFueraDisclaimer}>
-                ⚠ Valores estimados ±20%. Pueden variar según el restaurante y la preparación.
+                Datos reales de FatSecret y Nutritionix. Los valores pueden variar según el restaurante.
               </Text>
             </View>
           )}
@@ -1072,10 +1073,10 @@ export default function HomeScreen() {
           <TouchableOpacity activeOpacity={1} style={{ backgroundColor: colors.card, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, gap: 16 }}>
             {/* Cabecera */}
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <Text style={{ fontSize: 28 }}>{platoParaAnadir?.icono}</Text>
+              <Text style={{ fontSize: 28 }}>🍽️</Text>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: colors.text, fontSize: 16, fontWeight: "800" }}>{platoParaAnadir?.nombre}</Text>
-                <Text style={{ color: "#4ADE80", fontSize: 14, fontWeight: "700" }}>~{platoParaAnadir?.calorias} kcal</Text>
+                <Text style={{ color: "#4ADE80", fontSize: 14, fontWeight: "700" }}>{platoParaAnadir?.calorias} kcal · {platoParaAnadir?.fuente}</Text>
               </View>
             </View>
             {/* Macros */}
@@ -1112,8 +1113,8 @@ export default function HomeScreen() {
             >
               <Text style={{ color: "#fff", fontSize: 16, fontWeight: "800" }}>Añadir a {mealComerFuera}</Text>
             </TouchableOpacity>
-            {platoParaAnadir?.nota && (
-              <Text style={{ color: colors.textMuted, fontSize: 11, textAlign: "center" }}>ℹ {platoParaAnadir.nota}</Text>
+            {platoParaAnadir?.porcion && (
+              <Text style={{ color: colors.textMuted, fontSize: 11, textAlign: "center" }}>Porción: {platoParaAnadir.porcion}</Text>
             )}
           </TouchableOpacity>
         </TouchableOpacity>
@@ -1208,6 +1209,7 @@ function makeStyles(colors: ReturnType<typeof useApp>["colors"]) {
     platoRight: { alignItems: "flex-end" },
     platoCal: { color: "#4ADE80", fontSize: 18, fontWeight: "800" },
     platoCalLabel: { color: colors.textMuted, fontSize: 10 },
+    comerFueraSearch: { flex: 1, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
     comerFueraDisclaimer: { color: colors.textMuted, fontSize: 10, textAlign: "center", marginTop: 14, lineHeight: 15 },
   });
 }
