@@ -52,10 +52,30 @@ export default function SettingsScreen() {
 
   const s = makeStyles(colors);
 
-  // Cargar avatar guardado
+  // Cargar avatar: AsyncStorage (rápido) + Supabase (sync entre dispositivos)
   useEffect(() => {
     AsyncStorage.getItem(AVATAR_KEY).then(v => { if (v) setAvatarUri(v); });
   }, []);
+
+  // Cuando tengamos userId, sincronizar avatar desde Supabase
+  useEffect(() => {
+    if (!userId) return;
+    supabase.from("perfiles").select("avatar_url").eq("id", userId).single()
+      .then(({ data }) => {
+        if (data?.avatar_url) {
+          setAvatarUri(data.avatar_url);
+          AsyncStorage.setItem(AVATAR_KEY, data.avatar_url);
+        }
+      });
+  }, [userId]);
+
+  const guardarAvatarEnNube = (dataUri: string) => {
+    setAvatarUri(dataUri);
+    AsyncStorage.setItem(AVATAR_KEY, dataUri);
+    if (userId) {
+      supabase.from("perfiles").update({ avatar_url: dataUri }).eq("id", userId);
+    }
+  };
 
   // NOT async — preserves user-gesture context on Android Chrome (same fix as mic)
   const handlePickAvatar = () => {
@@ -68,11 +88,17 @@ export default function SettingsScreen() {
         if (!file) return;
         const reader = new FileReader();
         reader.onload = (ev) => {
-          const uri = ev.target?.result as string;
-          if (uri) {
-            setAvatarUri(uri);
-            AsyncStorage.setItem(AVATAR_KEY, uri);
-          }
+          const full = ev.target?.result as string;
+          if (!full) return;
+          // Redimensionar a 200×200 para no guardar imágenes enormes en la BD
+          const img = new (window as any).Image();
+          img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 200; canvas.height = 200;
+            canvas.getContext("2d")!.drawImage(img, 0, 0, 200, 200);
+            guardarAvatarEnNube(canvas.toDataURL("image/jpeg", 0.85));
+          };
+          img.src = full;
         };
         reader.readAsDataURL(file);
       };
@@ -90,11 +116,14 @@ export default function SettingsScreen() {
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.7,
+        base64: true,
       });
       if (!result.canceled && result.assets[0]) {
-        const uri = result.assets[0].uri;
-        setAvatarUri(uri);
-        await AsyncStorage.setItem(AVATAR_KEY, uri);
+        const asset = result.assets[0];
+        const dataUri = asset.base64
+          ? `data:image/jpeg;base64,${asset.base64}`
+          : asset.uri;
+        guardarAvatarEnNube(dataUri);
       }
     })();
   };
