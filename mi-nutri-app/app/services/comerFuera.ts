@@ -1,13 +1,11 @@
 /**
- * comerFuera.ts
- * Client-side service for "Comer Fuera" restaurant search.
- * Calls the /api/restaurant-search serverless function which proxies
- * FatSecret and Nutritionix (API keys stay server-side).
+ * comerFuera.ts — service for "Comer Fuera" restaurant search.
+ * Calls /api/restaurant-search (FatSecret proxy) by food category.
  */
 
 export type ResultadoRestaurante = {
   nombre: string;
-  fuente: string;
+  restaurante?: string; // restaurant chain name if known
   calorias: number;
   proteinas: number;
   carbs: number;
@@ -15,12 +13,13 @@ export type ResultadoRestaurante = {
   porcion?: string;
 };
 
-export async function buscarPlatosRestaurante(
-  query: string
+export async function buscarPorCategoria(
+  category: string,
+  lang: string
 ): Promise<ResultadoRestaurante[]> {
   try {
     const res = await fetch(
-      `/api/restaurant-search?q=${encodeURIComponent(query)}`
+      `/api/restaurant-search?category=${encodeURIComponent(category)}&lang=${encodeURIComponent(lang)}`
     );
     if (!res.ok) return [];
     const data = await res.json();

@@ -18,7 +18,7 @@ import {
   View
 } from "react-native";
 import { useApp } from "./services/i18n";
-import { buscarPlatosRestaurante, ResultadoRestaurante } from "./services/comerFuera";
+import { buscarPorCategoria, ResultadoRestaurante } from "./services/comerFuera";
 import { supabase } from "./services/supabase";
 
 type Porcion = { nombre: string; gramos: number };
@@ -71,7 +71,25 @@ const DIAS_ZH = ["一","二","三","四","五","六","日"];
 
 const EMPTY_MEALS: MealData = { desayuno: [], comida: [], merienda: [], cena: [] };
 
-const QUICK_SEARCHES = ["paella", "pizza margherita", "hamburguesa", "tortilla española", "salmón plancha", "ensalada césar"];
+type CategoriaRestaurante = {
+  id: string; icon: string;
+  labels: Record<string, string>;
+  countries?: string[]; // ISO-3166-1 alpha-2 codes where this appears first
+};
+const CATEGORIAS_COMER_FUERA: CategoriaRestaurante[] = [
+  { id: "rapida",      icon: "🍔", labels: { es: "Comida Rápida", en: "Fast Food",   fr: "Fast Food",       de: "Fast Food",    zh: "快餐"    } },
+  { id: "italiana",   icon: "🍕", labels: { es: "Italiana",      en: "Italian",      fr: "Italienne",       de: "Italienisch",  zh: "意大利"  } },
+  { id: "pollo",      icon: "🍗", labels: { es: "Pollo & Aves",  en: "Chicken",      fr: "Poulet",          de: "Hähnchen",     zh: "鸡肉"    } },
+  { id: "ensaladas",  icon: "🥗", labels: { es: "Ensaladas",     en: "Salads",       fr: "Salades",         de: "Salate",       zh: "沙拉"    } },
+  { id: "asiatica",   icon: "🍜", labels: { es: "Asiática",      en: "Asian",        fr: "Asiatique",       de: "Asiatisch",    zh: "亚洲菜"  } },
+  { id: "mexicana",   icon: "🌮", labels: { es: "Mexicana",      en: "Mexican",      fr: "Mexicaine",       de: "Mexikanisch",  zh: "墨西哥"  } },
+  { id: "carnes",     icon: "🥩", labels: { es: "Carnes",        en: "Meats & Grill",fr: "Grillades",       de: "Fleisch",      zh: "烤肉"    } },
+  { id: "española",   icon: "🥘", labels: { es: "Española",      en: "Spanish",      fr: "Espagnole",       de: "Spanisch",     zh: "西班牙"  }, countries: ["es"] },
+  { id: "mediterranea",icon:"🫒", labels: { es: "Mediterránea",  en: "Mediterranean",fr: "Méditerranéenne", de: "Mediterran",   zh: "地中海"  }, countries: ["es","fr","it","gr","pt"] },
+  { id: "americana",  icon: "🦅", labels: { es: "BBQ Americana", en: "American BBQ", fr: "BBQ Américain",   de: "Amerikanisch", zh: "美式BBQ" }, countries: ["us"] },
+  { id: "francesa",   icon: "🥐", labels: { es: "Francesa",      en: "French",       fr: "Française",       de: "Französisch",  zh: "法国"    }, countries: ["fr"] },
+  { id: "alemana",    icon: "🍺", labels: { es: "Alemana",       en: "German",       fr: "Allemande",       de: "Deutsch",      zh: "德国"    }, countries: ["de"] },
+];
 
 function dateToKey(date: Date): string {
   const y = date.getFullYear();
@@ -484,7 +502,10 @@ export default function HomeScreen() {
   const [showDuplicarCalendario, setShowDuplicarCalendario] = useState(false);
   const [duplicarComidaKey, setDuplicarComidaKey] = useState<keyof MealData | null>(null);
   const [showComerFuera, setShowComerFuera] = useState(false);
-  const [queryRestaurante, setQueryRestaurante] = useState("");
+  const [userCountry, setUserCountry] = useState("");
+  const [userCity, setUserCity] = useState("");
+  const [loadingLocation, setLoadingLocation] = useState(false);
+  const [categoriaActiva, setCategoriaActiva] = useState<CategoriaRestaurante | null>(null);
   const [loadingRestaurante, setLoadingRestaurante] = useState(false);
   const [resultadosRestaurante, setResultadosRestaurante] = useState<ResultadoRestaurante[]>([]);
   const [platoParaAnadir, setPlatoParaAnadir] = useState<ResultadoRestaurante | null>(null);
@@ -647,11 +668,38 @@ export default function HomeScreen() {
     setDuplicarComidaKey(null);
   };
 
-  const buscarEnRestaurante = async (q: string) => {
-    if (!q.trim()) return;
+  const obtenerUbicacion = () => {
+    if (userCountry || loadingLocation) return;
+    setLoadingLocation(true);
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          try {
+            const { latitude, longitude } = pos.coords;
+            const res = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
+              { headers: { "User-Agent": "mi-nutri-app/1.0" } }
+            );
+            const data = await res.json();
+            const cc = (data.address?.country_code || "").toLowerCase();
+            const city = data.address?.city || data.address?.town || data.address?.village || "";
+            setUserCountry(cc);
+            setUserCity(city ? `${city}${cc ? ", " + cc.toUpperCase() : ""}` : cc.toUpperCase());
+          } catch {}
+          setLoadingLocation(false);
+        },
+        () => setLoadingLocation(false)
+      );
+    } else {
+      setLoadingLocation(false);
+    }
+  };
+
+  const cargarCategoria = async (cat: CategoriaRestaurante) => {
+    setCategoriaActiva(cat);
     setLoadingRestaurante(true);
     setResultadosRestaurante([]);
-    const r = await buscarPlatosRestaurante(q.trim());
+    const r = await buscarPorCategoria(cat.id, language);
     setResultadosRestaurante(r);
     setLoadingRestaurante(false);
   };
@@ -665,7 +713,7 @@ export default function HomeScreen() {
       const entrada = {
         id: Date.now().toString(),
         name: plato.nombre,
-        brand: plato.fuente,
+        brand: plato.restaurante || "Restaurante",
         supermercado: "Restaurante",
         calories: plato.calorias,
         protein: plato.proteinas,
@@ -965,14 +1013,14 @@ export default function HomeScreen() {
         <View style={{ marginTop: 12, marginBottom: 8 }}>
           <TouchableOpacity
             style={[s.comerFueraHeader, showComerFuera && s.comerFueraHeaderOpen]}
-            onPress={() => setShowComerFuera(v => !v)}
+            onPress={() => { setShowComerFuera(v => !v); obtenerUbicacion(); }}
             activeOpacity={0.8}
           >
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
               <Text style={{ fontSize: 22 }}>🍽️</Text>
               <View>
                 <Text style={s.comerFueraTitulo}>Comer Fuera</Text>
-                <Text style={s.comerFueraSub}>Busca platos con datos reales de FatSecret</Text>
+                <Text style={s.comerFueraSub}>Platos de restaurante cerca de ti</Text>
               </View>
             </View>
             <Text style={s.comerFueraChevron}>{showComerFuera ? "▲" : "▼"}</Text>
@@ -980,85 +1028,97 @@ export default function HomeScreen() {
 
           {showComerFuera && (
             <View style={s.comerFueraBody}>
-              {/* Búsqueda */}
-              <View style={{ flexDirection: "row", gap: 8, marginBottom: 10 }}>
-                <TextInput
-                  style={[s.comerFueraSearch, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder, color: colors.text }]}
-                  value={queryRestaurante}
-                  onChangeText={setQueryRestaurante}
-                  placeholder="Ej: paella, hamburguesa, salmón…"
-                  placeholderTextColor={colors.textMuted}
-                  returnKeyType="search"
-                  onSubmitEditing={() => buscarEnRestaurante(queryRestaurante)}
-                />
-                <TouchableOpacity
-                  style={{ backgroundColor: "#1F6FEB", borderRadius: 12, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", opacity: !queryRestaurante.trim() || loadingRestaurante ? 0.4 : 1 }}
-                  onPress={() => buscarEnRestaurante(queryRestaurante)}
-                  disabled={!queryRestaurante.trim() || loadingRestaurante}
-                >
-                  <Text style={{ fontSize: 16 }}>🔍</Text>
-                </TouchableOpacity>
+
+              {/* Barra de ubicación */}
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 14 }}>
+                <Text style={{ fontSize: 13 }}>📍</Text>
+                {loadingLocation
+                  ? <ActivityIndicator size="small" color="#1F6FEB" />
+                  : <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                      {userCity || (userCountry ? userCountry.toUpperCase() : "Detectando ubicación…")}
+                    </Text>
+                }
               </View>
 
-              {/* Chips de búsqueda rápida */}
-              {!loadingRestaurante && resultadosRestaurante.length === 0 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }} contentContainerStyle={{ gap: 6 }}>
-                  {QUICK_SEARCHES.map(q => (
+              {!categoriaActiva ? (
+                /* ── Grid de categorías ── */
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+                  {[
+                    ...CATEGORIAS_COMER_FUERA.filter(c => c.countries?.includes(userCountry)),
+                    ...CATEGORIAS_COMER_FUERA.filter(c => !c.countries?.length),
+                    ...CATEGORIAS_COMER_FUERA.filter(c => c.countries?.length && !c.countries.includes(userCountry)),
+                  ].filter((c, i, arr) => arr.findIndex(x => x.id === c.id) === i)
+                   .map(cat => (
                     <TouchableOpacity
-                      key={q}
-                      style={s.catChip}
-                      onPress={() => { setQueryRestaurante(q); buscarEnRestaurante(q); }}
+                      key={cat.id}
+                      style={s.catCard}
+                      onPress={() => cargarCategoria(cat)}
+                      activeOpacity={0.75}
                     >
-                      <Text style={s.catChipText}>{q}</Text>
+                      <Text style={{ fontSize: 28 }}>{cat.icon}</Text>
+                      <Text style={s.catCardText}>{cat.labels[language] || cat.labels.es}</Text>
                     </TouchableOpacity>
                   ))}
-                </ScrollView>
-              )}
+                </View>
+              ) : (
+                /* ── Lista de platos ── */
+                <View>
+                  <TouchableOpacity
+                    style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 14 }}
+                    onPress={() => { setCategoriaActiva(null); setResultadosRestaurante([]); }}
+                  >
+                    <Text style={{ color: "#58A6FF", fontSize: 14, fontWeight: "600" }}>
+                      ← {categoriaActiva.labels[language] || categoriaActiva.labels.es}
+                    </Text>
+                  </TouchableOpacity>
 
-              {/* Cargando */}
-              {loadingRestaurante && (
-                <View style={{ paddingVertical: 24, alignItems: "center", gap: 8 }}>
-                  <ActivityIndicator color="#1F6FEB" />
-                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>Buscando en FatSecret…</Text>
+                  {loadingRestaurante && (
+                    <View style={{ paddingVertical: 28, alignItems: "center", gap: 8 }}>
+                      <ActivityIndicator color="#1F6FEB" />
+                      <Text style={{ color: colors.textMuted, fontSize: 12 }}>Buscando…</Text>
+                    </View>
+                  )}
+
+                  {resultadosRestaurante.map((plato, i) => (
+                    <TouchableOpacity
+                      key={i}
+                      style={s.platoRow}
+                      onPress={() => { setPlatoParaAnadir(plato); setMealComerFuera("comida"); }}
+                      activeOpacity={0.75}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.platoNombre} numberOfLines={1}>{plato.nombre}</Text>
+                        {plato.restaurante && (
+                          <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 1 }}>
+                            🏪 {plato.restaurante}
+                          </Text>
+                        )}
+                        <View style={s.platoMacros}>
+                          <Text style={[s.platoMacroVal, { color: "#60A5FA" }]}>{plato.proteinas}g P</Text>
+                          <Text style={s.platoMacroDot}>·</Text>
+                          <Text style={[s.platoMacroVal, { color: "#FBBF24" }]}>{plato.carbs}g C</Text>
+                          <Text style={s.platoMacroDot}>·</Text>
+                          <Text style={[s.platoMacroVal, { color: "#F87171" }]}>{plato.grasas}g G</Text>
+                          {plato.porcion ? <><Text style={s.platoMacroDot}>·</Text><Text style={[s.platoMacroVal, { color: colors.textMuted }]}>{plato.porcion}</Text></> : null}
+                        </View>
+                      </View>
+                      <View style={s.platoRight}>
+                        <Text style={s.platoCal}>{plato.calorias}</Text>
+                        <Text style={s.platoCalLabel}>kcal</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+
+                  {!loadingRestaurante && resultadosRestaurante.length === 0 && (
+                    <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: "center", paddingVertical: 16 }}>
+                      Sin resultados disponibles.
+                    </Text>
+                  )}
                 </View>
               )}
 
-              {/* Resultados */}
-              {resultadosRestaurante.map((plato, i) => (
-                <TouchableOpacity
-                  key={i}
-                  style={s.platoRow}
-                  onPress={() => { setPlatoParaAnadir(plato); setMealComerFuera("comida"); }}
-                  activeOpacity={0.75}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.platoNombre} numberOfLines={1}>{plato.nombre}</Text>
-                    <View style={s.platoMacros}>
-                      <Text style={[s.platoMacroVal, { color: "#60A5FA" }]}>{plato.proteinas}g P</Text>
-                      <Text style={s.platoMacroDot}>·</Text>
-                      <Text style={[s.platoMacroVal, { color: "#FBBF24" }]}>{plato.carbs}g C</Text>
-                      <Text style={s.platoMacroDot}>·</Text>
-                      <Text style={[s.platoMacroVal, { color: "#F87171" }]}>{plato.grasas}g G</Text>
-                      {plato.porcion ? <><Text style={s.platoMacroDot}>·</Text><Text style={[s.platoMacroVal, { color: colors.textMuted }]}>{plato.porcion}</Text></> : null}
-                    </View>
-                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>{plato.fuente}</Text>
-                  </View>
-                  <View style={s.platoRight}>
-                    <Text style={s.platoCal}>{plato.calorias}</Text>
-                    <Text style={s.platoCalLabel}>kcal</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-
-              {/* Sin resultados */}
-              {!loadingRestaurante && resultadosRestaurante.length === 0 && queryRestaurante.trim() !== "" && (
-                <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: "center", paddingVertical: 12 }}>
-                  Sin resultados. Prueba en inglés o con otro nombre.
-                </Text>
-              )}
-
               <Text style={s.comerFueraDisclaimer}>
-                Datos de FatSecret. Los valores pueden variar según el restaurante.
+                Los valores pueden variar según el restaurante y la preparación.
               </Text>
             </View>
           )}
@@ -1076,7 +1136,9 @@ export default function HomeScreen() {
               <Text style={{ fontSize: 28 }}>🍽️</Text>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: colors.text, fontSize: 16, fontWeight: "800" }}>{platoParaAnadir?.nombre}</Text>
-                <Text style={{ color: "#4ADE80", fontSize: 14, fontWeight: "700" }}>{platoParaAnadir?.calorias} kcal · {platoParaAnadir?.fuente}</Text>
+                <Text style={{ color: "#4ADE80", fontSize: 14, fontWeight: "700" }}>
+                  {platoParaAnadir?.calorias} kcal{platoParaAnadir?.restaurante ? ` · ${platoParaAnadir.restaurante}` : ""}
+                </Text>
               </View>
             </View>
             {/* Macros */}
@@ -1195,10 +1257,8 @@ function makeStyles(colors: ReturnType<typeof useApp>["colors"]) {
     comerFueraSub: { color: colors.textMuted, fontSize: 11, marginTop: 1 },
     comerFueraChevron: { color: colors.textMuted, fontSize: 12 },
     comerFueraBody: { backgroundColor: colors.card, borderBottomLeftRadius: 16, borderBottomRightRadius: 16, borderWidth: 1, borderTopWidth: 0, borderColor: colors.cardBorder, padding: 14, gap: 0 },
-    catChip: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: colors.inputBg, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1, borderColor: colors.cardBorder },
-    catChipActive: { backgroundColor: "#1F6FEB22", borderColor: "#1F6FEB55" },
-    catChipText: { color: colors.textSub, fontSize: 12, fontWeight: "600" },
-    catChipTextActive: { color: "#58A6FF" },
+    catCard: { width: "47%", backgroundColor: colors.inputBg, borderRadius: 14, borderWidth: 1, borderColor: colors.cardBorder, paddingVertical: 14, paddingHorizontal: 8, alignItems: "center", gap: 6 },
+    catCardText: { color: colors.text, fontSize: 12, fontWeight: "700", textAlign: "center" },
     platoRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.cardBorder, gap: 10 },
     platoLeft: { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
     platoNombre: { color: colors.text, fontSize: 14, fontWeight: "600" },
@@ -1209,7 +1269,6 @@ function makeStyles(colors: ReturnType<typeof useApp>["colors"]) {
     platoRight: { alignItems: "flex-end" },
     platoCal: { color: "#4ADE80", fontSize: 18, fontWeight: "800" },
     platoCalLabel: { color: colors.textMuted, fontSize: 10 },
-    comerFueraSearch: { flex: 1, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
     comerFueraDisclaimer: { color: colors.textMuted, fontSize: 10, textAlign: "center", marginTop: 14, lineHeight: 15 },
   });
 }
