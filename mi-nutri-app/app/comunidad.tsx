@@ -595,7 +595,13 @@ export default function ComunidadScreen() {
       />
 
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()}><Text style={s.back}>← Volver</Text></TouchableOpacity>
+        <View style={s.topBar}>
+          <TouchableOpacity onPress={() => router.back()}><Text style={s.back}>← Volver</Text></TouchableOpacity>
+          {avatarUri
+            ? <Image source={{ uri: avatarUri }} style={{ width: 32, height: 32, borderRadius: 16 }} />
+            : null
+          }
+        </View>
         <View style={s.headerRow}>
           <View>
             <Text style={s.title}>Comunidad</Text>
@@ -727,6 +733,7 @@ function makePrincipalStyles(colors: any) {
     safe: { flex: 1, backgroundColor: colors.bg },
     scroll: { flex: 1, paddingHorizontal: 16 },
     header: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8, gap: 10 },
+    topBar: { flexDirection: "row" as const, justifyContent: "space-between" as const, alignItems: "center" as const },
     back: { color: "#58A6FF", fontSize: 14 },
     headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
     title: { color: colors.text, fontSize: 26, fontWeight: "800" },
