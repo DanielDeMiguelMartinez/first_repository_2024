@@ -90,6 +90,27 @@ function NetworkBanner({ visible }: { visible: boolean }) {
   );
 }
 
+// ── Detectar idioma del dispositivo / navegador ───────────────────────────────
+function detectarIdiomaDispositivo(): Language {
+  try {
+    const locale =
+      (typeof navigator !== "undefined" && navigator.language) ||
+      (typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().locale : "es") ||
+      "es";
+    const code = locale.slice(0, 2).toLowerCase();
+    // Map locale code → supported Language
+    const MAP: Record<string, Language> = {
+      es: "es", ca: "es", gl: "es", eu: "es", pt: "es", // Iberian → Spanish
+      fr: "fr", oc: "fr",                                // French group
+      de: "de", nl: "de", sv: "de", da: "de", nb: "de", no: "de", fi: "de", // Germanic → German
+      zh: "zh",                                           // Chinese
+    };
+    return MAP[code] ?? "en";
+  } catch {
+    return "es";
+  }
+}
+
 // ── Comprobar conexión ───────────────────────────────────────────────────────
 async function comprobarConexion(): Promise<boolean> {
   if (Platform.OS === "web") {
@@ -126,6 +147,7 @@ export default function RootLayout() {
           AsyncStorage.getItem(THEME_KEY),
         ]);
         if (storedLang) setLanguageState(storedLang as Language);
+        else setLanguageState(detectarIdiomaDispositivo());
         if (storedTheme) setThemeState(storedTheme as Theme);
       } catch {}
       setLoaded(true);

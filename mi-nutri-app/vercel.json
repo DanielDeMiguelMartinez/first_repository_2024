@@ -2,5 +2,41 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
-  ]
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Permissions-Policy", "value": "microphone=*, camera=*, geolocation=*" },
+        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin-allow-popups" }
+      ]
+    },
+    {
+      "source": "/api/nearby-restaurants",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, s-maxage=86400, stale-while-revalidate=3600" }
+      ]
+    },
+    {
+      "source": "/api/restaurant-search",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, s-maxage=604800, stale-while-revalidate=86400" }
+      ]
+    },
+    {
+      "source": "/_expo/static/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/update-nutrition",
+      "schedule": "0 0 1 1,7 *"
+    }
+  ],
+  "functions": {
+    "api/cron/update-nutrition.js": { "maxDuration": 60 }
+  }
 }

@@ -1,10 +1,11 @@
 /**
  * scanner.web.tsx — Escáner de códigos de barras para web (Vercel).
  *
- * Usa html5-qrcode que gestiona internamente los permisos de cámara,
- * el stream de vídeo y el bucle de detección.
- * Soporta: EAN-13, EAN-8, QR, Code-128, UPC-A/E, Code-39, Data Matrix, etc.
- * Funciona en Chrome, Firefox, Safari (iOS/macOS) y Android.
+ * Estrategia dual:
+ *  1. BarcodeDetector nativo (Chrome/Edge/Android) — hardware-accelerated, ~60 fps
+ *  2. html5-qrcode como fallback (Firefox, Safari, etc.)
+ *
+ * Formatos soportados: EAN-13, EAN-8, UPC-A, UPC-E, Code-128, Code-39, QR, Data Matrix.
  */
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
@@ -12,6 +13,57 @@ import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "rea
 
 const CONTAINER_ID = "mi-nutri-scanner-root";
 
+const BARCODE_FORMATS = [
+  "ean_13", "ean_8", "upc_a", "upc_e",
+  "code_128", "code_39", "qr_code", "data_matrix", "itf",
+];
+
+// ── Estrategia 1: BarcodeDetector nativo ─────────────────────────────────────
+async function startNativeDetector(
+  videoEl: HTMLVideoElement,
+  onCode: (code: string) => void,
+  onReady: () => void,
+  isMountedRef: React.MutableRefObject<boolean>
+): Promise<() => void> {
+  const BarcodeDetector = (window as any).BarcodeDetector;
+  const supported = await BarcodeDetector.getSupportedFormats?.() ?? BARCODE_FORMATS;
+  const formats = BARCODE_FORMATS.filter(f => supported.includes(f));
+  const detector = new BarcodeDetector({ formats: formats.length ? formats : BARCODE_FORMATS });
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: "environment",
+      width:  { ideal: 1920 },
+      height: { ideal: 1080 },
+    },
+  });
+
+  videoEl.srcObject = stream;
+  videoEl.setAttribute("playsinline", "true");
+  await videoEl.play();
+  onReady();
+
+  let rafId: number;
+  const scan = async () => {
+    if (!isMountedRef.current) return;
+    try {
+      const results = await detector.detect(videoEl);
+      if (results.length > 0) {
+        onCode(results[0].rawValue);
+        return; // stop loop after detection
+      }
+    } catch {}
+    rafId = requestAnimationFrame(scan);
+  };
+  rafId = requestAnimationFrame(scan);
+
+  return () => {
+    cancelAnimationFrame(rafId);
+    stream.getTracks().forEach(t => t.stop());
+  };
+}
+
+// ── Estrategia 2: html5-qrcode (fallback) ────────────────────────────────────
 function loadHtml5QrCode(): Promise<any> {
   return new Promise((resolve, reject) => {
     if ((window as any).Html5Qrcode) { resolve((window as any).Html5Qrcode); return; }
@@ -23,15 +75,56 @@ function loadHtml5QrCode(): Promise<any> {
   });
 }
 
+async function startHtml5QrCode(
+  node: HTMLElement,
+  onCode: (code: string) => void,
+  onReady: () => void,
+  isMountedRef: React.MutableRefObject<boolean>
+): Promise<() => void> {
+  const Html5Qrcode = await loadHtml5QrCode();
+  if (!isMountedRef.current) return () => {};
+
+  const scanner = new Html5Qrcode(CONTAINER_ID);
+
+  await scanner.start(
+    { facingMode: "environment" },
+    {
+      fps: 30,
+      qrbox: (w: number, h: number) => ({
+        width:  Math.round(Math.min(w, h) * 0.88),
+        height: Math.round(Math.min(w, h) * 0.52),
+      }),
+      aspectRatio: window.innerHeight / window.innerWidth,
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+      formatsToSupport: [
+        // html5-qrcode format enum values for product barcodes
+        0, 1, 2, 3, 4, 5, 10, 11, // EAN-13, EAN-8, UPC-A, UPC-E, Code-128, Code-39, QR, DataMatrix
+      ],
+    },
+    (decodedText: string) => { if (isMountedRef.current) onCode(decodedText); },
+    undefined
+  );
+
+  onReady();
+
+  return () => {
+    try { scanner.stop().catch(() => {}); } catch {}
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function ScannerScreen() {
   const router = useRouter();
   const { forReceta, forCreateFood } = useLocalSearchParams<{
     forReceta?: string; forCreateFood?: string;
   }>();
 
-  const containerRef = useRef<any>(null);
-  const scannerRef   = useRef<any>(null);
-  const scannedRef   = useRef(false);
+  const containerRef  = useRef<any>(null);
+  const videoRef      = useRef<HTMLVideoElement | null>(null);
+  const isMountedRef  = useRef(true);
+  const scannedRef    = useRef(false);
+  const cleanupRef    = useRef<(() => void) | null>(null);
 
   const [status, setStatus]     = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -39,9 +132,7 @@ export default function ScannerScreen() {
   const handleCode = (code: string) => {
     if (scannedRef.current) return;
     scannedRef.current = true;
-    if (scannerRef.current) {
-      try { scannerRef.current.stop().catch(() => {}); } catch {}
-    }
+    cleanupRef.current?.();
     if (forCreateFood === "1") {
       router.replace({ pathname: "/create-food", params: { scannedCode: code } });
     } else if (forReceta === "1") {
@@ -51,73 +142,61 @@ export default function ScannerScreen() {
     }
   };
 
+  const onReady = () => { if (isMountedRef.current) setStatus("ready"); };
+
   useEffect(() => {
-    let isMounted = true;
+    isMountedRef.current = true;
 
     const init = async (node: HTMLElement) => {
-      /* Aseguramos que el nodo tenga las dimensiones correctas */
       node.id = CONTAINER_ID;
       node.style.width  = "100%";
       node.style.height = "100%";
 
       try {
-        const Html5Qrcode = await loadHtml5QrCode();
-        if (!isMounted) return;
+        const hasNative = typeof (window as any).BarcodeDetector !== "undefined";
 
-        const scanner = new Html5Qrcode(CONTAINER_ID);
-        scannerRef.current = scanner;
+        if (hasNative) {
+          // Crear elemento <video> manualmente para BarcodeDetector
+          const video = document.createElement("video");
+          video.style.cssText = "width:100%;height:100%;object-fit:cover;";
+          node.appendChild(video);
+          videoRef.current = video;
 
-        await scanner.start(
-          { facingMode: "environment" },
-          {
-            fps: 10,
-            /* Recuadro de guía centrado en pantalla */
-            qrbox: (w: number, h: number) => ({
-              width:  Math.round(Math.min(w, h) * 0.75),
-              height: Math.round(Math.min(w, h) * 0.45),
-            }),
-            aspectRatio: window.innerHeight / window.innerWidth,
-          },
-          (decodedText: string) => { if (isMounted) handleCode(decodedText); },
-          /* Ignorar errores de frame individuales */
-          undefined
-        );
-
-        if (isMounted) setStatus("ready");
+          const cleanup = await startNativeDetector(video, handleCode, onReady, isMountedRef);
+          cleanupRef.current = cleanup;
+        } else {
+          const cleanup = await startHtml5QrCode(node, handleCode, onReady, isMountedRef);
+          cleanupRef.current = cleanup;
+        }
       } catch (e: any) {
-        if (!isMounted) return;
+        if (!isMountedRef.current) return;
         const msg = e?.name === "NotAllowedError"
-          ? "Permiso de cámara denegado."
+          ? "Permiso de cámara denegado. Permite el acceso en tu navegador."
           : "No se pudo abrir la cámara.";
         setErrorMsg(msg);
         setStatus("error");
       }
     };
 
-    /* Esperar a que el ref de React Native esté montado en el DOM */
     const attach = () => {
       const node = containerRef.current;
-      if (node) { init(node); }
-      else { setTimeout(attach, 50); }
+      if (node) init(node);
+      else setTimeout(attach, 30);
     };
     attach();
 
     return () => {
-      isMounted = false;
+      isMountedRef.current = false;
       scannedRef.current = true;
-      if (scannerRef.current) {
-        try { scannerRef.current.stop().catch(() => {}); } catch {}
-      }
+      cleanupRef.current?.();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
     <View style={s.root}>
-      {/* html5-qrcode inyecta el vídeo y el marco de guía aquí */}
       <View ref={containerRef} style={s.camera} />
 
-      {/* Overlay de carga */}
       {status === "loading" && (
         <View pointerEvents="none" style={s.overlay}>
           <ActivityIndicator color="#1F6FEB" size="large" />
@@ -125,14 +204,12 @@ export default function ScannerScreen() {
         </View>
       )}
 
-      {/* Error */}
       {status === "error" && errorMsg && (
         <View style={s.errorBanner}>
           <Text style={s.errorText}>⚠ {errorMsg}</Text>
         </View>
       )}
 
-      {/* Botón volver */}
       <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
         <Text style={s.backText}>← Volver</Text>
       </TouchableOpacity>
