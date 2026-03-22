@@ -2,9 +2,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import { signalMealSaved, subscribeMealUpdates } from "./services/refreshSignal";
+import { useAvatar } from "./services/useAvatar";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Modal,
   PanResponder,
   Pressable,
@@ -18,7 +20,7 @@ import {
   View
 } from "react-native";
 import { useApp } from "./services/i18n";
-import { buscarPorCategoria, ResultadoRestaurante } from "./services/comerFuera";
+import { buscarRestaurantesCercanos, buscarRestaurantesPopulares, PlatoParaAnadir, RestauranteCercano } from "./services/comerFuera";
 import { supabase } from "./services/supabase";
 
 type Porcion = { nombre: string; gramos: number };
@@ -71,25 +73,6 @@ const DIAS_ZH = ["一","二","三","四","五","六","日"];
 
 const EMPTY_MEALS: MealData = { desayuno: [], comida: [], merienda: [], cena: [] };
 
-type CategoriaRestaurante = {
-  id: string; icon: string;
-  labels: Record<string, string>;
-  countries?: string[]; // ISO-3166-1 alpha-2 codes where this appears first
-};
-const CATEGORIAS_COMER_FUERA: CategoriaRestaurante[] = [
-  { id: "rapida",      icon: "🍔", labels: { es: "Comida Rápida", en: "Fast Food",   fr: "Fast Food",       de: "Fast Food",    zh: "快餐"    } },
-  { id: "italiana",   icon: "🍕", labels: { es: "Italiana",      en: "Italian",      fr: "Italienne",       de: "Italienisch",  zh: "意大利"  } },
-  { id: "pollo",      icon: "🍗", labels: { es: "Pollo & Aves",  en: "Chicken",      fr: "Poulet",          de: "Hähnchen",     zh: "鸡肉"    } },
-  { id: "ensaladas",  icon: "🥗", labels: { es: "Ensaladas",     en: "Salads",       fr: "Salades",         de: "Salate",       zh: "沙拉"    } },
-  { id: "asiatica",   icon: "🍜", labels: { es: "Asiática",      en: "Asian",        fr: "Asiatique",       de: "Asiatisch",    zh: "亚洲菜"  } },
-  { id: "mexicana",   icon: "🌮", labels: { es: "Mexicana",      en: "Mexican",      fr: "Mexicaine",       de: "Mexikanisch",  zh: "墨西哥"  } },
-  { id: "carnes",     icon: "🥩", labels: { es: "Carnes",        en: "Meats & Grill",fr: "Grillades",       de: "Fleisch",      zh: "烤肉"    } },
-  { id: "española",   icon: "🥘", labels: { es: "Española",      en: "Spanish",      fr: "Espagnole",       de: "Spanisch",     zh: "西班牙"  }, countries: ["es"] },
-  { id: "mediterranea",icon:"🫒", labels: { es: "Mediterránea",  en: "Mediterranean",fr: "Méditerranéenne", de: "Mediterran",   zh: "地中海"  }, countries: ["es","fr","it","gr","pt"] },
-  { id: "americana",  icon: "🦅", labels: { es: "BBQ Americana", en: "American BBQ", fr: "BBQ Américain",   de: "Amerikanisch", zh: "美式BBQ" }, countries: ["us"] },
-  { id: "francesa",   icon: "🥐", labels: { es: "Francesa",      en: "French",       fr: "Française",       de: "Französisch",  zh: "法国"    }, countries: ["fr"] },
-  { id: "alemana",    icon: "🍺", labels: { es: "Alemana",       en: "German",       fr: "Allemande",       de: "Deutsch",      zh: "德国"    }, countries: ["de"] },
-];
 
 function dateToKey(date: Date): string {
   const y = date.getFullYear();
@@ -487,6 +470,7 @@ function FoodRow({ food, onEdit, onDelete }: { food: FoodEntry; onEdit: () => vo
 export default function HomeScreen() {
   const router = useRouter();
   const { t, colors, theme, language } = useApp();
+  const avatarUri = useAvatar();
   const params = useLocalSearchParams<{ goToDate?: string }>();
 
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -504,11 +488,15 @@ export default function HomeScreen() {
   const [showComerFuera, setShowComerFuera] = useState(false);
   const [userCountry, setUserCountry] = useState("");
   const [userCity, setUserCity] = useState("");
+  const [userLat, setUserLat] = useState<number | null>(null);
+  const [userLon, setUserLon] = useState<number | null>(null);
   const [loadingLocation, setLoadingLocation] = useState(false);
-  const [categoriaActiva, setCategoriaActiva] = useState<CategoriaRestaurante | null>(null);
-  const [loadingRestaurante, setLoadingRestaurante] = useState(false);
-  const [resultadosRestaurante, setResultadosRestaurante] = useState<ResultadoRestaurante[]>([]);
-  const [platoParaAnadir, setPlatoParaAnadir] = useState<ResultadoRestaurante | null>(null);
+  const [loadingNearby, setLoadingNearby] = useState(false);
+  const [restaurantesCercanos, setRestaurantesCercanos] = useState<RestauranteCercano[]>([]);
+  const [modoCercanos, setModoCercanos] = useState<"cercanos" | "popular">("popular");
+  const [restauranteActivo, setRestauranteActivo] = useState<RestauranteCercano | null>(null);
+  const [nearbyError, setNearbyError] = useState<"ubicacion" | null>(null);
+  const [platoParaAnadir, setPlatoParaAnadir] = useState<PlatoParaAnadir | null>(null);
   const [mealComerFuera, setMealComerFuera] = useState<keyof MealData>("comida");
 
   const isToday = isSameDay(currentDate, new Date());
@@ -668,43 +656,62 @@ export default function HomeScreen() {
     setDuplicarComidaKey(null);
   };
 
+  const buscarCercanos = async (lat: number, lon: number, country: string) => {
+    setLoadingNearby(true);
+    setRestaurantesCercanos([]);
+    setRestauranteActivo(null);
+    const result = await buscarRestaurantesCercanos(lat, lon, country);
+    setModoCercanos(result.modo ?? "popular");
+    setRestaurantesCercanos(result.restaurantes);
+    setLoadingNearby(false);
+  };
+
   const obtenerUbicacion = () => {
-    if (userCountry || loadingLocation) return;
+    if (loadingLocation) return;
+    setNearbyError(null);
     setLoadingLocation(true);
     if (typeof navigator !== "undefined" && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         async (pos) => {
+          const { latitude, longitude } = pos.coords;
+          setUserLat(latitude);
+          setUserLon(longitude);
+          let cc = userCountry;
           try {
-            const { latitude, longitude } = pos.coords;
             const res = await fetch(
               `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
               { headers: { "User-Agent": "mi-nutri-app/1.0" } }
             );
             const data = await res.json();
-            const cc = (data.address?.country_code || "").toLowerCase();
+            cc = (data.address?.country_code || "").toLowerCase();
             const city = data.address?.city || data.address?.town || data.address?.village || "";
             setUserCountry(cc);
             setUserCity(city ? `${city}${cc ? ", " + cc.toUpperCase() : ""}` : cc.toUpperCase());
           } catch {}
           setLoadingLocation(false);
+          buscarCercanos(latitude, longitude, cc);
         },
-        () => setLoadingLocation(false)
+        () => {
+          setLoadingLocation(false);
+          setNearbyError("ubicacion");
+          // Still show popular chains even without GPS
+          buscarRestaurantesPopulares(userCountry).then(r => {
+            setModoCercanos("popular");
+            setRestaurantesCercanos(r.restaurantes);
+          });
+        },
+        { timeout: 10000 }
       );
     } else {
       setLoadingLocation(false);
+      buscarRestaurantesPopulares(userCountry).then(r => {
+        setModoCercanos("popular");
+        setRestaurantesCercanos(r.restaurantes);
+      });
     }
   };
 
-  const cargarCategoria = async (cat: CategoriaRestaurante) => {
-    setCategoriaActiva(cat);
-    setLoadingRestaurante(true);
-    setResultadosRestaurante([]);
-    const r = await buscarPorCategoria(cat.id, language);
-    setResultadosRestaurante(r);
-    setLoadingRestaurante(false);
-  };
-
-  const anadirPlatoRapido = async (plato: ResultadoRestaurante, meal: keyof MealData) => {
+  const anadirPlatoRapido = async (plato: PlatoParaAnadir, meal: keyof MealData) => {
     try {
       const key = dateToKey(currentDate);
       const stored = await AsyncStorage.getItem(key);
@@ -882,7 +889,9 @@ export default function HomeScreen() {
                   <Text style={s.headerBtnText}>Comunidad</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={s.headerBtn} onPress={() => router.push("/settings")}>
-                  <Text style={s.headerBtnIcon}>⚙️</Text>
+                  {avatarUri
+                    ? <Image source={{ uri: avatarUri }} style={{ width: 22, height: 22, borderRadius: 11 }} />
+                    : <Text style={s.headerBtnIcon}>⚙️</Text>}
                   <Text style={s.headerBtnText}>{t.settings}</Text>
                 </TouchableOpacity>
               </View>
@@ -1013,14 +1022,22 @@ export default function HomeScreen() {
         <View style={{ marginTop: 12, marginBottom: 8 }}>
           <TouchableOpacity
             style={[s.comerFueraHeader, showComerFuera && s.comerFueraHeaderOpen]}
-            onPress={() => { setShowComerFuera(v => !v); obtenerUbicacion(); }}
+            onPress={() => {
+              const opening = !showComerFuera;
+              setShowComerFuera(v => !v);
+              if (opening && restaurantesCercanos.length === 0) obtenerUbicacion();
+            }}
             activeOpacity={0.8}
           >
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
               <Text style={{ fontSize: 22 }}>🍽️</Text>
               <View>
                 <Text style={s.comerFueraTitulo}>Comer Fuera</Text>
-                <Text style={s.comerFueraSub}>Platos de restaurante cerca de ti</Text>
+                <Text style={s.comerFueraSub}>
+                  {modoCercanos === "cercanos" && userCity
+                    ? `Restaurantes cerca de ${userCity.split(",")[0]}`
+                    : "Opciones saludables en restaurantes"}
+                </Text>
               </View>
             </View>
             <Text style={s.comerFueraChevron}>{showComerFuera ? "▲" : "▼"}</Text>
@@ -1030,76 +1047,130 @@ export default function HomeScreen() {
             <View style={s.comerFueraBody}>
 
               {/* Barra de ubicación */}
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 14 }}>
+              <View style={s.locationBar}>
                 <Text style={{ fontSize: 13 }}>📍</Text>
                 {loadingLocation
-                  ? <ActivityIndicator size="small" color="#1F6FEB" />
-                  : <Text style={{ color: colors.textMuted, fontSize: 12 }}>
-                      {userCity || (userCountry ? userCountry.toUpperCase() : "Detectando ubicación…")}
+                  ? <><ActivityIndicator size="small" color="#1F6FEB" /><Text style={s.locationBarText}>Detectando ubicación…</Text></>
+                  : <Text style={s.locationBarText}>
+                      {nearbyError === "ubicacion"
+                        ? "Sin acceso a ubicación — mostrando populares"
+                        : modoCercanos === "cercanos"
+                          ? userCity || "Ubicación detectada"
+                          : userCity || "Restaurantes populares"}
                     </Text>
                 }
+                {nearbyError === "ubicacion" && (
+                  <TouchableOpacity onPress={obtenerUbicacion} style={{ marginLeft: "auto" }}>
+                    <Text style={{ color: "#58A6FF", fontSize: 12 }}>Reintentar</Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
-              {!categoriaActiva ? (
-                /* ── Grid de categorías ── */
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-                  {[
-                    ...CATEGORIAS_COMER_FUERA.filter(c => c.countries?.includes(userCountry)),
-                    ...CATEGORIAS_COMER_FUERA.filter(c => !c.countries?.length),
-                    ...CATEGORIAS_COMER_FUERA.filter(c => c.countries?.length && !c.countries.includes(userCountry)),
-                  ].filter((c, i, arr) => arr.findIndex(x => x.id === c.id) === i)
-                   .map(cat => (
-                    <TouchableOpacity
-                      key={cat.id}
-                      style={s.catCard}
-                      onPress={() => cargarCategoria(cat)}
-                      activeOpacity={0.75}
-                    >
-                      <Text style={{ fontSize: 28 }}>{cat.icon}</Text>
-                      <Text style={s.catCardText}>{cat.labels[language] || cat.labels.es}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              ) : (
-                /* ── Lista de platos ── */
+              {/* Vista: lista de restaurantes */}
+              {!restauranteActivo && (
                 <View>
-                  <TouchableOpacity
-                    style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 14 }}
-                    onPress={() => { setCategoriaActiva(null); setResultadosRestaurante([]); }}
-                  >
-                    <Text style={{ color: "#58A6FF", fontSize: 14, fontWeight: "600" }}>
-                      ← {categoriaActiva.labels[language] || categoriaActiva.labels.es}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {loadingRestaurante && (
-                    <View style={{ paddingVertical: 28, alignItems: "center", gap: 8 }}>
-                      <ActivityIndicator color="#1F6FEB" />
-                      <Text style={{ color: colors.textMuted, fontSize: 12 }}>Buscando…</Text>
+                  {/* Indicador de modo */}
+                  {modoCercanos === "cercanos" && (
+                    <View style={s.modoBadge}>
+                      <Text style={s.modoBadgeText}>🗺️ Restaurantes encontrados cerca de ti</Text>
+                    </View>
+                  )}
+                  {modoCercanos === "popular" && restaurantesCercanos.length > 0 && (
+                    <View style={[s.modoBadge, { backgroundColor: colors.inputBg }]}>
+                      <Text style={[s.modoBadgeText, { color: colors.textMuted }]}>⭐ Cadenas populares en tu zona</Text>
                     </View>
                   )}
 
-                  {resultadosRestaurante.map((plato, i) => (
+                  {/* Cargando */}
+                  {loadingNearby && (
+                    <View style={s.nearbyLoading}>
+                      <ActivityIndicator color="#1F6FEB" />
+                      <Text style={s.nearbyLoadingText}>Buscando restaurantes cercanos…</Text>
+                    </View>
+                  )}
+
+                  {/* Lista de restaurantes */}
+                  {!loadingNearby && restaurantesCercanos.map((rest, i) => (
+                    <TouchableOpacity
+                      key={i}
+                      style={s.restCard}
+                      onPress={() => setRestauranteActivo(rest)}
+                      activeOpacity={0.75}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.restCardName}>🏪 {rest.nombre}</Text>
+                        <View style={s.restCardMeta}>
+                          {rest.distancia != null && (
+                            <Text style={s.restCardDist}>
+                              {rest.distancia < 1000
+                                ? `${rest.distancia}m`
+                                : `${(rest.distancia / 1000).toFixed(1)}km`}
+                            </Text>
+                          )}
+                          {rest.rating != null && (
+                            <Text style={s.restCardRating}>⭐ {rest.rating}</Text>
+                          )}
+                          <Text style={s.restCardCount}>🥗 {rest.platos.length} opciones saludables</Text>
+                        </View>
+                      </View>
+                      <Text style={{ color: "#58A6FF", fontSize: 20 }}>›</Text>
+                    </TouchableOpacity>
+                  ))}
+
+                  {!loadingNearby && restaurantesCercanos.length === 0 && !loadingLocation && (
+                    <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: "center", paddingVertical: 20 }}>
+                      No encontramos restaurantes conocidos en tu zona.
+                    </Text>
+                  )}
+                </View>
+              )}
+
+              {/* Vista: opciones saludables del restaurante seleccionado */}
+              {restauranteActivo && (
+                <View>
+                  <TouchableOpacity
+                    style={s.backToList}
+                    onPress={() => setRestauranteActivo(null)}
+                  >
+                    <Text style={s.backToListText}>← {restauranteActivo.nombre}</Text>
+                  </TouchableOpacity>
+
+                  {/* Meta: distancia y rating */}
+                  {(restauranteActivo.distancia != null || restauranteActivo.rating != null) && (
+                    <Text style={s.restDetailMeta}>
+                      {restauranteActivo.distancia != null
+                        ? restauranteActivo.distancia < 1000
+                          ? `${restauranteActivo.distancia}m`
+                          : `${(restauranteActivo.distancia / 1000).toFixed(1)}km`
+                        : ""}
+                      {restauranteActivo.rating != null
+                        ? ` · ⭐ ${restauranteActivo.rating}`
+                        : ""}
+                    </Text>
+                  )}
+
+                  <View style={s.saludableHeader}>
+                    <Text style={s.saludableHeaderText}>🥗 Opciones más saludables (≤ 650 kcal)</Text>
+                  </View>
+
+                  {restauranteActivo.platos.map((plato, i) => (
                     <TouchableOpacity
                       key={i}
                       style={s.platoRow}
-                      onPress={() => { setPlatoParaAnadir(plato); setMealComerFuera("comida"); }}
+                      onPress={() => { setPlatoParaAnadir({ ...plato, restaurante: restauranteActivo.nombre }); setMealComerFuera("comida"); }}
                       activeOpacity={0.75}
                     >
                       <View style={{ flex: 1 }}>
                         <Text style={s.platoNombre} numberOfLines={1}>{plato.nombre}</Text>
-                        {plato.restaurante && (
-                          <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 1 }}>
-                            🏪 {plato.restaurante}
-                          </Text>
-                        )}
                         <View style={s.platoMacros}>
                           <Text style={[s.platoMacroVal, { color: "#60A5FA" }]}>{plato.proteinas}g P</Text>
                           <Text style={s.platoMacroDot}>·</Text>
                           <Text style={[s.platoMacroVal, { color: "#FBBF24" }]}>{plato.carbs}g C</Text>
                           <Text style={s.platoMacroDot}>·</Text>
                           <Text style={[s.platoMacroVal, { color: "#F87171" }]}>{plato.grasas}g G</Text>
-                          {plato.porcion ? <><Text style={s.platoMacroDot}>·</Text><Text style={[s.platoMacroVal, { color: colors.textMuted }]}>{plato.porcion}</Text></> : null}
+                          {plato.porcion
+                            ? <><Text style={s.platoMacroDot}>·</Text><Text style={[s.platoMacroVal, { color: colors.textMuted }]}>{plato.porcion}</Text></>
+                            : null}
                         </View>
                       </View>
                       <View style={s.platoRight}>
@@ -1108,17 +1179,11 @@ export default function HomeScreen() {
                       </View>
                     </TouchableOpacity>
                   ))}
-
-                  {!loadingRestaurante && resultadosRestaurante.length === 0 && (
-                    <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: "center", paddingVertical: 16 }}>
-                      Sin resultados disponibles.
-                    </Text>
-                  )}
                 </View>
               )}
 
               <Text style={s.comerFueraDisclaimer}>
-                Los valores pueden variar según el restaurante y la preparación.
+                Datos nutricionales oficiales de cada cadena. Disponibilidad según zona.
               </Text>
             </View>
           )}
@@ -1257,8 +1322,23 @@ function makeStyles(colors: ReturnType<typeof useApp>["colors"]) {
     comerFueraSub: { color: colors.textMuted, fontSize: 11, marginTop: 1 },
     comerFueraChevron: { color: colors.textMuted, fontSize: 12 },
     comerFueraBody: { backgroundColor: colors.card, borderBottomLeftRadius: 16, borderBottomRightRadius: 16, borderWidth: 1, borderTopWidth: 0, borderColor: colors.cardBorder, padding: 14, gap: 0 },
-    catCard: { width: "47%", backgroundColor: colors.inputBg, borderRadius: 14, borderWidth: 1, borderColor: colors.cardBorder, paddingVertical: 14, paddingHorizontal: 8, alignItems: "center", gap: 6 },
-    catCardText: { color: colors.text, fontSize: 12, fontWeight: "700", textAlign: "center" },
+    locationBar: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, paddingHorizontal: 2, marginBottom: 4 },
+    locationBarText: { color: colors.textMuted, fontSize: 12, flex: 1 },
+    modoBadge: { backgroundColor: "#1F6FEB22", borderRadius: 8, paddingVertical: 5, paddingHorizontal: 10, marginBottom: 8, alignSelf: "flex-start" },
+    modoBadgeText: { color: "#1F6FEB", fontSize: 11, fontWeight: "700" },
+    restCard: { backgroundColor: colors.inputBg, borderRadius: 12, borderWidth: 1, borderColor: colors.cardBorder, padding: 12, marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    restCardName: { color: colors.text, fontSize: 14, fontWeight: "700" },
+    restCardMeta: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
+    restCardDist: { color: colors.textMuted, fontSize: 12 },
+    restCardRating: { color: "#FBBF24", fontSize: 12, fontWeight: "700" },
+    restCardCount: { color: "#4ADE80", fontSize: 12, fontWeight: "600" },
+    backToList: { flexDirection: "row", alignItems: "center", paddingVertical: 8, marginBottom: 8 },
+    backToListText: { color: "#1F6FEB", fontSize: 14, fontWeight: "700" },
+    restDetailMeta: { color: colors.textMuted, fontSize: 12, marginBottom: 10 },
+    saludableHeader: { backgroundColor: "#4ADE8022", borderRadius: 8, paddingVertical: 5, paddingHorizontal: 10, marginBottom: 8 },
+    saludableHeaderText: { color: "#4ADE80", fontSize: 12, fontWeight: "700" },
+    nearbyLoading: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 12 },
+    nearbyLoadingText: { color: colors.textMuted, fontSize: 13 },
     platoRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.cardBorder, gap: 10 },
     platoLeft: { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
     platoNombre: { color: colors.text, fontSize: 14, fontWeight: "600" },

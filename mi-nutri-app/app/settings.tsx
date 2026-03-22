@@ -1,9 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   Alert,
+  Image,
   Modal,
+  Platform,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -17,7 +20,8 @@ import { calcularObjetivos, UserProfile } from "./onboarding";
 import { Language, LANGUAGE_FLAGS, LANGUAGE_NAMES, Theme, useApp } from "./services/i18n";
 import { supabase } from "./services/supabase";
 
-const GOALS_KEY = "nutri_daily_goals";
+const GOALS_KEY  = "nutri_daily_goals";
+const AVATAR_KEY = "nutri_avatar";
 
 const ACTIVIDAD_LABELS: Record<UserProfile["actividad"], string> = {
   sedentario: "Sedentario 🪑", ligero: "Ligero 🚶", moderado: "Moderado 🏃",
@@ -44,8 +48,56 @@ export default function SettingsScreen() {
   const [guardando, setGuardando] = useState(false);
   const [userEmail, setUserEmail] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
 
   const s = makeStyles(colors);
+
+  // Cargar avatar guardado
+  useEffect(() => {
+    AsyncStorage.getItem(AVATAR_KEY).then(v => { if (v) setAvatarUri(v); });
+  }, []);
+
+  // NOT async — preserves user-gesture context on Android Chrome (same fix as mic)
+  const handlePickAvatar = () => {
+    if (Platform.OS === "web") {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.onchange = (e: any) => {
+        const file = e.target?.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const uri = ev.target?.result as string;
+          if (uri) {
+            setAvatarUri(uri);
+            AsyncStorage.setItem(AVATAR_KEY, uri);
+          }
+        };
+        reader.readAsDataURL(file);
+      };
+      input.click();
+      return;
+    }
+    void (async () => {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permiso denegado", "Necesitas permitir el acceso a la galería de fotos.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"] as any,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const uri = result.assets[0].uri;
+        setAvatarUri(uri);
+        await AsyncStorage.setItem(AVATAR_KEY, uri);
+      }
+    })();
+  };
 
   useEffect(() => {
     // Escuchar el estado de auth — funciona tanto en web como en móvil
@@ -258,9 +310,14 @@ export default function SettingsScreen() {
           <View style={s.section}>
             <Text style={s.sectionLabel}>👤 Mi perfil</Text>
             <View style={s.profileCard}>
-              <View style={s.profileAvatar}>
-                <Text style={{ fontSize: 32 }}>{profile.sexo === "hombre" ? "♂️" : "♀️"}</Text>
-              </View>
+              <TouchableOpacity style={s.profileAvatar} onPress={handlePickAvatar} activeOpacity={0.8}>
+                {avatarUri
+                  ? <Image source={{ uri: avatarUri }} style={{ width: 56, height: 56, borderRadius: 28 }} />
+                  : <Text style={{ fontSize: 32 }}>{profile.sexo === "hombre" ? "♂️" : "♀️"}</Text>}
+                <View style={{ position: "absolute", bottom: -2, right: -2, backgroundColor: "#1F6FEB", borderRadius: 10, width: 20, height: 20, alignItems: "center", justifyContent: "center" }}>
+                  <Text style={{ color: "#fff", fontSize: 11 }}>📷</Text>
+                </View>
+              </TouchableOpacity>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: colors.text, fontSize: 17, fontWeight: "800" }}>{profile.nombre}</Text>
                 <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>{userEmail}</Text>

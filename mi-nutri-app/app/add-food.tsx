@@ -313,10 +313,13 @@ export default function AddFoodScreen() {
   const [mostrarEnvaseManual, setMostrarEnvaseManual] = useState(false);
   // ── VOZ ──────────────────────────────────────────────────────────────────
   const [escuchando, setEscuchando] = useState(false);
+  const [codigoNoEncontrado, setCodigoNoEncontrado] = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cacheRef = useRef<Record<string, Producto[]>>({});
   const currentSearch = useRef("");
+  // Keeps the SpeechRecognition instance alive — Chrome Android GC's local vars before events fire
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => { cargarDatos(); }, []);
   useEffect(() => {
@@ -411,38 +414,165 @@ export default function AddFoodScreen() {
     }, 150);
   };
 
-  // ── iniciarVoz con expo-speech-recognition ──────────────────────────────────
-  const iniciarVoz = async () => {
-    try {
-      const { ExpoSpeechRecognitionModule } = await import("expo-speech-recognition");
+  // ── iniciarVoz — micrófono robusto para cualquier navegador/dispositivo ───────
+  //
+  // Dos causas raíz del fallo en Chrome Android:
+  //  1. GC BUG: la variable `recognition` era local → Chrome la recolectaba antes
+  //     de que disparara ningún evento. Fix: almacenarla en recognitionRef.
+  //  2. PERMISSION CHAIN: getUserMedia establece el permiso de micrófono a nivel
+  //     del navegador. El callback .then() de una promesa iniciada en un gesto de
+  //     usuario conserva la "user activation" en Chrome, por lo que recognition.start()
+  //     dentro de ese callback sí tiene permisos.
+  //
+  // NOT async — la función no puede ser async; el path web no usa await.
+  const iniciarVoz = () => {
+    if (Platform.OS === "web") {
 
-      const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-      if (!granted) {
-        Alert.alert("Permiso denegado", "Activa el micrófono en Ajustes para usar la búsqueda por voz.");
+      // ── Si ya está escuchando, parar ───────────────────────────────────────
+      if (escuchando) {
+        try { recognitionRef.current?.abort(); } catch {}
+        recognitionRef.current = null;
+        setEscuchando(false);
         return;
       }
 
-      setEscuchando(true);
-      ExpoSpeechRecognitionModule.start({ lang: "es-ES", interimResults: false, continuous: false });
+      // ── Detección de soporte ──────────────────────────────────────────────
+      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SR) {
+        const ua = navigator.userAgent;
+        const isFF  = ua.includes("Firefox");
+        const isSaf = /^((?!Chrome|Android).)*Safari/i.test(ua);
+        Alert.alert(
+          "🎤 Voz no disponible",
+          isFF  ? "Firefox no soporta reconocimiento de voz.\nUsa Chrome, Edge o Safari." :
+          isSaf ? "Activa el reconocimiento de voz en:\niOS → Ajustes → Safari → Siri y Búsqueda." :
+                  "Tu navegador no soporta voz. Prueba Chrome o Edge."
+        );
+        return;
+      }
 
-      const unsubResult = ExpoSpeechRecognitionModule.addListener("result", (event: any) => {
-        const texto = event.results?.[0]?.transcript ?? "";
-        if (texto.trim()) buscarConDebounce(texto.trim());
-        setEscuchando(false);
-        unsubResult.remove(); unsubError.remove(); unsubEnd.remove();
-      });
-      const unsubError = ExpoSpeechRecognitionModule.addListener("error", () => {
-        setEscuchando(false);
-        unsubResult.remove(); unsubError.remove(); unsubEnd.remove();
-      });
-      const unsubEnd = ExpoSpeechRecognitionModule.addListener("end", () => {
-        setEscuchando(false);
-        unsubResult.remove(); unsubError.remove(); unsubEnd.remove();
-      });
-    } catch {
-      setEscuchando(false);
-      Alert.alert("Voz no disponible", "Ejecuta: npx expo install expo-speech-recognition", [{ text: "OK" }]);
+      // ── Mensaje de instrucciones si el permiso está denegado ──────────────
+      const instruccionesPermiso =
+        "Para activarlo:\n\n" +
+        "• Toca 🔒 en la barra de URL\n" +
+        "• Permisos del sitio → Micrófono → Permitir\n" +
+        "• Recarga la página\n\n" +
+        "Si el candado no aparece:\n" +
+        "Chrome ⋮ → Configuración → Privacidad → Permisos del sitio → Micrófono";
+
+      // ── Crea el objeto SR, lo guarda en ref (evita GC) y llama start() ───
+      const arrancarReconocimiento = () => {
+        const recognition = new SR();
+        recognitionRef.current = recognition;   // ← CRÍTICO: evita el GC en Chrome Android
+
+        // Usar el idioma del navegador del usuario; fallback a español
+        recognition.lang = navigator.language || "es-ES";
+        recognition.interimResults = false;
+        recognition.continuous     = false;
+        recognition.maxAlternatives = 3;
+
+        recognition.onstart  = () => setEscuchando(true);
+        recognition.onend    = () => { setEscuchando(false); recognitionRef.current = null; };
+        recognition.onnomatch = () => { setEscuchando(false); recognitionRef.current = null; };
+
+        recognition.onerror = (e: any) => {
+          setEscuchando(false);
+          recognitionRef.current = null;
+          switch (e.error) {
+            case "not-allowed":
+            case "service-not-allowed":
+              Alert.alert("🎤 Micrófono bloqueado", instruccionesPermiso, [{ text: "Entendido" }]);
+              break;
+            case "network":
+              Alert.alert("Sin conexión", "El reconocimiento de voz necesita internet.");
+              break;
+            case "audio-capture":
+              Alert.alert("Sin micrófono", "No se detectó micrófono en el dispositivo.");
+              break;
+            case "language-not-supported":
+              // Reintentar con español si el idioma del dispositivo no está soportado
+              try {
+                const r2 = new SR();
+                recognitionRef.current = r2;
+                r2.lang = "es-ES";
+                r2.interimResults = false;
+                r2.continuous = false;
+                r2.maxAlternatives = 3;
+                r2.onend    = () => { setEscuchando(false); recognitionRef.current = null; };
+                r2.onerror  = () => { setEscuchando(false); recognitionRef.current = null; };
+                r2.onresult = (ev: any) => {
+                  setEscuchando(false);
+                  recognitionRef.current = null;
+                  for (let i = 0; i < (ev.results?.length ?? 0); i++) {
+                    const t = ev.results[i]?.[0]?.transcript?.trim();
+                    if (t) { buscarConDebounce(t); return; }
+                  }
+                };
+                r2.start();
+              } catch { setEscuchando(false); recognitionRef.current = null; }
+              break;
+            case "no-speech":
+            case "aborted":
+              break; // silencioso — el usuario no habló o canceló
+            default:
+              Alert.alert("Error de voz", `Error: ${e.error}. Recarga e inténtalo de nuevo.`);
+          }
+        };
+
+        recognition.onresult = (e: any) => {
+          setEscuchando(false);
+          recognitionRef.current = null;
+          for (let i = 0; i < (e.results?.length ?? 0); i++) {
+            const texto = e.results[i]?.[0]?.transcript?.trim();
+            if (texto) { buscarConDebounce(texto); return; }
+          }
+        };
+
+        try {
+          recognition.start();
+        } catch {
+          setEscuchando(false);
+          recognitionRef.current = null;
+        }
+      };
+
+      // Llamar directamente desde el gesto del usuario — el navegador gestiona
+      // el diálogo de permiso internamente. No usar getUserMedia: su .then() es
+      // asíncrono y rompe el contexto de activación en Safari/Firefox Android.
+      arrancarReconocimiento();
+      return;
     }
+
+    // ── Nativo: expo-speech-recognition (iOS / Android app) ─────────────────
+    void (async () => {
+      try {
+        const { ExpoSpeechRecognitionModule } = await import("expo-speech-recognition");
+        const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+        if (!granted) {
+          Alert.alert("Permiso denegado", "Activa el micrófono en Ajustes del dispositivo.");
+          return;
+        }
+        setEscuchando(true);
+        ExpoSpeechRecognitionModule.start({ lang: "es-ES", interimResults: false, continuous: false });
+        const unsubResult = ExpoSpeechRecognitionModule.addListener("result", (event: any) => {
+          const texto = event.results?.[0]?.transcript ?? "";
+          if (texto.trim()) buscarConDebounce(texto.trim());
+          setEscuchando(false);
+          unsubResult.remove(); unsubError.remove(); unsubEnd.remove();
+        });
+        const unsubError = ExpoSpeechRecognitionModule.addListener("error", () => {
+          setEscuchando(false);
+          unsubResult.remove(); unsubError.remove(); unsubEnd.remove();
+        });
+        const unsubEnd = ExpoSpeechRecognitionModule.addListener("end", () => {
+          setEscuchando(false);
+          unsubResult.remove(); unsubError.remove(); unsubEnd.remove();
+        });
+      } catch {
+        setEscuchando(false);
+        Alert.alert("Voz no disponible", "No se pudo iniciar el reconocimiento de voz.");
+      }
+    })();
   };
 
   const cargarPorCodigo = async (c: string) => {
@@ -460,14 +590,7 @@ export default function AddFoodScreen() {
       resetEnvase();
       resetPorcion();
     } else {
-      Alert.alert(
-        "No encontrado",
-        "Producto no encontrado. Puedes crearlo manualmente.",
-        [
-          { text: "Cancelar", style: "cancel" },
-          { text: "Crear producto", onPress: () => router.push("/create-food") },
-        ]
-      );
+      setCodigoNoEncontrado(c);
     }
   };
 
@@ -613,10 +736,10 @@ export default function AddFoodScreen() {
         </View>
 
         <View style={s.tabs}>
-          <TouchableOpacity style={[s.tab, tab === "nombre" && s.tabActive]} onPress={() => { setTab("nombre"); setProducto(null); setResultados([]); setBusqueda(""); }}>
+          <TouchableOpacity style={[s.tab, tab === "nombre" && s.tabActive]} onPress={() => { setTab("nombre"); setProducto(null); setResultados([]); setBusqueda(""); setCodigoNoEncontrado(null); }}>
             <Text style={[s.tabText, tab === "nombre" && s.tabTextActive]}>🔍 Por nombre</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[s.tab, tab === "codigo" && s.tabActive]} onPress={() => { setTab("codigo"); setProducto(null); setResultados([]); }}>
+          <TouchableOpacity style={[s.tab, tab === "codigo" && s.tabActive]} onPress={() => { setTab("codigo"); setProducto(null); setResultados([]); setCodigoNoEncontrado(null); }}>
             <Text style={[s.tabText, tab === "codigo" && s.tabTextActive]}>📷 Por código</Text>
           </TouchableOpacity>
         </View>
@@ -665,7 +788,21 @@ export default function AddFoodScreen() {
             </View>
             <TouchableOpacity style={s.scanBtn} onPress={() => router.push("/scanner")}><Text style={s.scanBtnText}>📷 Escanear con cámara</Text></TouchableOpacity>
             {cargando && <ActivityIndicator color="#58A6FF" style={{ marginTop: 20 }} />}
-            {!cargando && renderHistorial()}
+            {codigoNoEncontrado && !cargando && (
+              <View style={s.notFoundBanner}>
+                <Text style={s.notFoundTitle}>Código no encontrado</Text>
+                <Text style={s.notFoundSub}>{codigoNoEncontrado}</Text>
+                <View style={s.notFoundBtns}>
+                  <TouchableOpacity style={s.notFoundBtn} onPress={() => { setCodigoNoEncontrado(null); router.back(); }}>
+                    <Text style={s.notFoundBtnText}>← Volver</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[s.notFoundBtn, s.notFoundBtnPrimary]} onPress={() => router.push({ pathname: "/create-food", params: { scannedCode: codigoNoEncontrado } })}>
+                    <Text style={[s.notFoundBtnText, s.notFoundBtnPrimaryText]}>➕ Añadir nuevo alimento</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+            {!cargando && !codigoNoEncontrado && renderHistorial()}
           </View>
         )}
 
@@ -899,6 +1036,14 @@ function makeSStyles(c: any) { return StyleSheet.create({
   quickBtn: { backgroundColor: c.card, borderWidth: 1, borderColor: c.cardBorder, borderRadius: 12, padding: 12, alignItems: "center" },
   quickBtnText: { color: c.textMuted, fontSize: 13 },
   noResultsWrap: { gap: 8, alignItems: "center", paddingTop: 8 },
+  notFoundBanner: { backgroundColor: c.card, borderWidth: 1, borderColor: c.cardBorder, borderRadius: 16, padding: 20, marginTop: 20, gap: 12, alignItems: "center" },
+  notFoundTitle: { color: c.text, fontSize: 16, fontWeight: "700" },
+  notFoundSub: { color: c.textMuted, fontSize: 12, fontFamily: "monospace" },
+  notFoundBtns: { flexDirection: "row", gap: 10, marginTop: 4 },
+  notFoundBtn: { flex: 1, backgroundColor: c.bg, borderWidth: 1, borderColor: c.cardBorder, borderRadius: 12, padding: 12, alignItems: "center" },
+  notFoundBtnText: { color: c.textSub, fontSize: 13, fontWeight: "600" },
+  notFoundBtnPrimary: { backgroundColor: "#1F6FEB", borderColor: "#1F6FEB" },
+  notFoundBtnPrimaryText: { color: "#fff" },
   emptyText: { color: c.textMuted, fontSize: 13, textAlign: "center" },
   productCard: { backgroundColor: c.card, borderRadius: 20, padding: 18, marginTop: 8, borderWidth: 1, borderColor: c.cardBorder, gap: 16 },
   productHeader: { gap: 6 },

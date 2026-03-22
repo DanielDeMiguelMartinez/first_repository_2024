@@ -1,11 +1,13 @@
 import { useApp } from "@/app/services/i18n";
 import { eliminarPublicacion, Receta, supabase } from "@/app/services/supabase";
+import { useAvatar } from "@/app/services/useAvatar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Modal,
   SafeAreaView,
   ScrollView,
@@ -43,6 +45,7 @@ type Valoracion = {
 };
 
 const NOMBRE_KEY = "nutri_nombre_usuario";
+const SAVED_RECIPES_KEY = "nutri_recetas_guardadas";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function safeNum(v: any): number {
@@ -95,11 +98,13 @@ function ModalDetalle({
   visible,
   onClose,
   nombreUsuario,
+  avatarUri,
 }: {
   pub: Publicacion | null;
   visible: boolean;
   onClose: () => void;
   nombreUsuario: string;
+  avatarUri?: string | null;
 }) {
   const { colors, theme } = useApp();
   const [valoraciones, setValoraciones] = useState<Valoracion[]>([]);
@@ -108,6 +113,7 @@ function ModalDetalle({
   const [comentario, setComentario] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [tab, setTab] = useState<"info" | "comentarios">("info");
+  const [guardada, setGuardada] = useState(false);
 
   React.useEffect(() => {
     if (pub && visible) {
@@ -115,6 +121,11 @@ function ModalDetalle({
       setEstrellas(0);
       setComentario("");
       setTab("info");
+      // Check if this recipe is already saved
+      AsyncStorage.getItem(SAVED_RECIPES_KEY).then((raw) => {
+        const lista = raw ? JSON.parse(raw) : [];
+        setGuardada(lista.some((r: any) => r.pub_id === pub.id));
+      });
     }
   }, [pub, visible]);
 
@@ -159,6 +170,22 @@ function ModalDetalle({
     setEnviando(false);
     cargarValoraciones();
     Alert.alert("✓ Enviado", "Tu valoración ha sido publicada.");
+  };
+
+  const toggleGuardar = async () => {
+    if (!pub) return;
+    const raw = await AsyncStorage.getItem(SAVED_RECIPES_KEY);
+    const lista = raw ? JSON.parse(raw) : [];
+    if (guardada) {
+      const nueva = lista.filter((r: any) => r.pub_id !== pub.id);
+      await AsyncStorage.setItem(SAVED_RECIPES_KEY, JSON.stringify(nueva));
+      setGuardada(false);
+    } else {
+      const nueva = [{ pub_id: pub.id, nombre: pub.nombre_receta, descripcion: pub.descripcion, ingredientes: pub.ingredientes, calorias_total: pub.calorias_total, proteinas_total: pub.proteinas_total, grasas_total: pub.grasas_total, carbohidratos_total: pub.carbohidratos_total, autor: pub.autor, savedAt: Date.now() }, ...lista];
+      await AsyncStorage.setItem(SAVED_RECIPES_KEY, JSON.stringify(nueva));
+      setGuardada(true);
+      Alert.alert("✓ Guardada", "Receta guardada en tu sección de Recetas → Guardadas.");
+    }
   };
 
   const anadirAlDia = async () => {
@@ -262,13 +289,25 @@ function ModalDetalle({
               <TouchableOpacity style={d.addDayBtn} onPress={anadirAlDia}>
                 <Text style={d.addDayBtnText}>+ Añadir a mi día de hoy</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={[d.saveBtn, guardada && d.saveBtnActive]} onPress={toggleGuardar}>
+                <Text style={[d.saveBtnText, guardada && d.saveBtnTextActive]}>
+                  {guardada ? "🔖 Guardada en Mis Recetas" : "🔖 Guardar receta"}
+                </Text>
+              </TouchableOpacity>
             </>
           )}
 
           {tab === "comentarios" && (
             <>
               <View style={d.card}>
-                <Text style={d.cardTitle}>⭐ Tu valoración</Text>
+                <View style={d.commentAuthorRow}>
+                  {avatarUri
+                    ? <Image source={{ uri: avatarUri }} style={{ width: 34, height: 34, borderRadius: 17, marginRight: 8 }} />
+                    : <View style={[d.avatar, { marginRight: 8 }]}><Text style={d.avatarText}>{(nombreUsuario || "A")[0].toUpperCase()}</Text></View>
+                  }
+                  <Text style={[d.commentAuthor, { fontSize: 15 }]}>{nombreUsuario || "Tú"}</Text>
+                </View>
+                <Text style={[d.cardTitle, { marginTop: 10 }]}>⭐ Tu valoración</Text>
                 <View style={d.starsRow}>
                   <Estrellas valor={estrellas} size={32} onPress={setEstrellas} starColor={colors.cardBorder} />
                   {estrellas > 0 && (
@@ -310,9 +349,10 @@ function ModalDetalle({
                   <View key={v.id} style={d.commentCard}>
                     <View style={d.commentHeader}>
                       <View style={d.commentAuthorRow}>
-                        <View style={d.avatar}>
-                          <Text style={d.avatarText}>{(v.autor || "A")[0].toUpperCase()}</Text>
-                        </View>
+                        {v.autor === nombreUsuario && avatarUri
+                          ? <Image source={{ uri: avatarUri }} style={{ width: 32, height: 32, borderRadius: 16, marginRight: 8 }} />
+                          : <View style={d.avatar}><Text style={d.avatarText}>{(v.autor || "A")[0].toUpperCase()}</Text></View>
+                        }
                         <View>
                           <Text style={d.commentAuthor}>{v.autor}</Text>
                           <Text style={d.commentTime}>{timeAgo(v.creado_en)}</Text>
@@ -466,6 +506,7 @@ function ModalPublicar({
 export default function ComunidadScreen() {
   const router = useRouter();
   const { colors, theme } = useApp();
+  const avatarUri = useAvatar();
   const [publicaciones, setPublicaciones] = useState<Publicacion[]>([]);
   const [cargando, setCargando] = useState(true);
   const [modalDetalle, setModalDetalle] = useState<Publicacion | null>(null);
@@ -544,6 +585,7 @@ export default function ComunidadScreen() {
         visible={!!modalDetalle}
         onClose={() => setModalDetalle(null)}
         nombreUsuario={nombreUsuario}
+        avatarUri={avatarUri}
       />
       <ModalPublicar
         visible={modalPublicar}
@@ -601,9 +643,10 @@ export default function ComunidadScreen() {
               activeOpacity={0.7}
             >
               <View style={s.cardHeader}>
-                <View style={s.avatarSmall}>
-                  <Text style={s.avatarSmallText}>{(pub.autor || "A")[0].toUpperCase()}</Text>
-                </View>
+                {pub.autor === nombreUsuario && avatarUri
+                  ? <Image source={{ uri: avatarUri }} style={{ width: 34, height: 34, borderRadius: 17, marginRight: 8 }} />
+                  : <View style={s.avatarSmall}><Text style={s.avatarSmallText}>{(pub.autor || "A")[0].toUpperCase()}</Text></View>
+                }
                 <View style={s.cardAuthorInfo}>
                   <Text style={s.cardAuthor}>{pub.autor}</Text>
                   <Text style={s.cardTime}>{timeAgo(pub.creado_en)}</Text>
@@ -762,6 +805,10 @@ function makeDetalleStyles(colors: any) {
     ingPillText: { color: colors.textSub, fontSize: 11 },
     addDayBtn: { backgroundColor: "#1F6FEB22", borderWidth: 1, borderColor: "#1F6FEB55", borderRadius: 12, padding: 14, alignItems: "center", marginBottom: 12 },
     addDayBtnText: { color: "#58A6FF", fontSize: 14, fontWeight: "700" },
+    saveBtn: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder, borderRadius: 12, padding: 14, alignItems: "center", marginBottom: 12 },
+    saveBtnActive: { backgroundColor: "#7C3AED22", borderColor: "#7C3AED" },
+    saveBtnText: { color: colors.textMuted, fontSize: 14, fontWeight: "700" },
+    saveBtnTextActive: { color: "#A78BFA" },
     starsRow: { flexDirection: "row", alignItems: "center", gap: 12 },
     starsLabel: { color: "#FBBF24", fontSize: 14, fontWeight: "700" },
     commentInput: { backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.cardBorder, borderRadius: 10, padding: 12, color: colors.text, fontSize: 14, minHeight: 80, textAlignVertical: "top" },

@@ -40,6 +40,20 @@ function getTodayKey(): string {
 
 const RECENT_FOODS_KEY = "nutri_recent_foods_v2";
 const FAVORITES_KEY = "nutri_favorites";
+const SAVED_COMMUNITY_KEY = "nutri_recetas_guardadas";
+
+type RecetaGuardada = {
+  pub_id: string;
+  nombre: string;
+  descripcion: string;
+  ingredientes: any[];
+  calorias_total: number;
+  proteinas_total: number;
+  grasas_total: number;
+  carbohidratos_total: number;
+  autor: string;
+  savedAt: number;
+};
 
 type MealKey = "desayuno" | "comida" | "merienda" | "cena";
 const MEAL_LABELS: Record<MealKey, string> = { desayuno: "Desayuno", comida: "Comida", merienda: "Merienda", cena: "Cena" };
@@ -425,6 +439,7 @@ export default function RecetasScreen() {
   const [recetas, setRecetas] = useState<Receta[]>([]);
   const [cargando, setCargando] = useState(true);
   const [modalAnadir, setModalAnadir] = useState<Receta | null>(null);
+  const [modalAnadirGuardada, setModalAnadirGuardada] = useState<RecetaGuardada | null>(null);
   const [mealSeleccionada, setMealSeleccionada] = useState<MealKey>("comida");
   const [modalCrear, setModalCrear] = useState(false);
   const [mostrarBuscador, setMostrarBuscador] = useState(false);
@@ -433,9 +448,15 @@ export default function RecetasScreen() {
   const [ingredientes, setIngredientes] = useState<IngredienteReceta[]>([]);
   const [guardandoReceta, setGuardandoReceta] = useState(false);
   const [confirmarBorrar, setConfirmarBorrar] = useState<Receta | null>(null);
+  const [confirmarBorrarGuardada, setConfirmarBorrarGuardada] = useState<RecetaGuardada | null>(null);
+  const [tab, setTab] = useState<"mias" | "guardadas">("mias");
+  const [recetasGuardadas, setRecetasGuardadas] = useState<RecetaGuardada[]>([]);
 
   useFocusEffect(React.useCallback(() => {
     cargarRecetasList();
+    AsyncStorage.getItem(SAVED_COMMUNITY_KEY).then((raw) => {
+      setRecetasGuardadas(raw ? JSON.parse(raw) : []);
+    });
   }, []));
 
   useEffect(() => {
@@ -536,6 +557,35 @@ export default function RecetasScreen() {
       setModalAnadir(null);
       Alert.alert("✓ Añadido", `${receta.nombre} añadido a ${MEAL_LABELS[meal]}.`);
     } catch { Alert.alert("Error", "No se pudo añadir al día."); }
+  };
+
+  const anadirGuardadaAlDia = async (rg: RecetaGuardada, meal: MealKey) => {
+    try {
+      const storageKey = getTodayKey();
+      const stored = await AsyncStorage.getItem(storageKey);
+      const meals = stored ? JSON.parse(stored) : { desayuno: [], comida: [], merienda: [], cena: [] };
+      meals[meal] = [...meals[meal], {
+        id: Date.now().toString(), name: rg.nombre, brand: "Receta guardada",
+        supermercado: "Receta propia",
+        calories: Math.round(safeNum(rg.calorias_total)),
+        protein: Number(safeNum(rg.proteinas_total).toFixed(1)),
+        carbs: Number(safeNum(rg.carbohidratos_total).toFixed(1)),
+        fat: Number(safeNum(rg.grasas_total).toFixed(1)),
+        saturatedFat: 0, sugar: 0, fiber: 0, salt: 0, per100: null,
+      }];
+      await AsyncStorage.setItem(storageKey, JSON.stringify(meals));
+      signalMealSaved(meals, storageKey);
+      setModalAnadirGuardada(null);
+      Alert.alert("✓ Añadido", `${rg.nombre} añadido a ${MEAL_LABELS[meal]}.`);
+    } catch { Alert.alert("Error", "No se pudo añadir al día."); }
+  };
+
+  const quitarGuardada = async (pub_id: string) => {
+    const raw = await AsyncStorage.getItem(SAVED_COMMUNITY_KEY);
+    const lista: RecetaGuardada[] = raw ? JSON.parse(raw) : [];
+    const nueva = lista.filter((r) => r.pub_id !== pub_id);
+    await AsyncStorage.setItem(SAVED_COMMUNITY_KEY, JSON.stringify(nueva));
+    setRecetasGuardadas(nueva);
   };
 
   const borrarReceta = (receta: Receta) => setConfirmarBorrar(receta);
@@ -654,62 +704,143 @@ export default function RecetasScreen() {
         <TouchableOpacity onPress={() => router.back()}><Text style={s.back}>← Volver</Text></TouchableOpacity>
         <View style={s.headerRow}>
           <Text style={s.title}>Recetas</Text>
-          <TouchableOpacity style={s.newBtn} onPress={() => { setNombre(""); setDescripcion(""); setIngredientes([]); setMostrarBuscador(false); setModalCrear(true); }}>
-            <Text style={s.newBtnText}>+ Nueva</Text>
+          {tab === "mias" && (
+            <TouchableOpacity style={s.newBtn} onPress={() => { setNombre(""); setDescripcion(""); setIngredientes([]); setMostrarBuscador(false); setModalCrear(true); }}>
+              <Text style={s.newBtnText}>+ Nueva</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        <View style={s.tabsRow}>
+          <TouchableOpacity style={[s.tabBtn, tab === "mias" && s.tabBtnActive]} onPress={() => setTab("mias")}>
+            <Text style={[s.tabBtnText, tab === "mias" && s.tabBtnTextActive]}>Mis recetas</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.tabBtn, tab === "guardadas" && s.tabBtnActive]} onPress={() => setTab("guardadas")}>
+            <Text style={[s.tabBtnText, tab === "guardadas" && s.tabBtnTextActive]}>
+              Guardadas{recetasGuardadas.length > 0 ? ` (${recetasGuardadas.length})` : ""}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
 
       <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
-        {cargando ? (
-          <ActivityIndicator color="#58A6FF" style={{ marginTop: 40 }} />
-        ) : recetas.length === 0 ? (
-          <View style={s.emptyWrap}>
-            <Text style={s.emptyIcon}>🍳</Text>
-            <Text style={s.emptyTitle}>Sin recetas todavía</Text>
-            <Text style={s.emptyText}>Crea tu primera receta</Text>
-            <TouchableOpacity style={s.saveBtn} onPress={() => { setNombre(""); setDescripcion(""); setIngredientes([]); setMostrarBuscador(false); setModalCrear(true); }}>
-              <Text style={s.saveBtnText}>+ Crear receta</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          recetas.map((receta) => (
-            <View key={receta.id} style={s.recetaCard}>
-              <View style={s.recetaHeader}>
-                <View style={s.recetaLeft}>
-                  <Text style={s.recetaNombre}>{receta.nombre}</Text>
-                  {receta.descripcion ? <Text style={s.recetaDesc} numberOfLines={1}>{receta.descripcion}</Text> : null}
-                </View>
-                <TouchableOpacity onPress={() => borrarReceta(receta)}><Text style={s.deleteBtn}>🗑️</Text></TouchableOpacity>
-              </View>
-              {receta.ingredientes && receta.ingredientes.length > 0 && (
-                <View style={s.ingList}>
-                  {receta.ingredientes.map((ing, i) => (
-                    <View key={i} style={s.ingPill}><Text style={s.ingPillText}>{ing.nombre} {ing.gramos}g</Text></View>
-                  ))}
-                </View>
-              )}
-              <View style={s.macrosRow}>
-                {[
-                  { val: Math.round(safeNum(receta.calorias_total)), label: "kcal", color: "#4ADE80" },
-                  { val: Math.round(safeNum(receta.proteinas_total)) + "g", label: "Prot", color: "#60A5FA" },
-                  { val: Math.round(safeNum(receta.carbohidratos_total)) + "g", label: "Carbos", color: "#FBBF24" },
-                  { val: Math.round(safeNum(receta.grasas_total)) + "g", label: "Grasas", color: "#F87171" },
-                ].map((item) => (
-                  <View key={item.label} style={s.macroBox}>
-                    <Text style={[s.macroVal, { color: item.color }]}>{item.val}</Text>
-                    <Text style={s.macroLabel}>{item.label}</Text>
-                  </View>
-                ))}
-              </View>
-              <TouchableOpacity style={s.anadirBtn} onPress={() => setModalAnadir(receta)}>
-                <Text style={s.anadirBtnText}>+ Añadir al día</Text>
+        {tab === "mias" ? (
+          cargando ? (
+            <ActivityIndicator color="#58A6FF" style={{ marginTop: 40 }} />
+          ) : recetas.length === 0 ? (
+            <View style={s.emptyWrap}>
+              <Text style={s.emptyIcon}>🍳</Text>
+              <Text style={s.emptyTitle}>Sin recetas todavía</Text>
+              <Text style={s.emptyText}>Crea tu primera receta</Text>
+              <TouchableOpacity style={s.saveBtn} onPress={() => { setNombre(""); setDescripcion(""); setIngredientes([]); setMostrarBuscador(false); setModalCrear(true); }}>
+                <Text style={s.saveBtnText}>+ Crear receta</Text>
               </TouchableOpacity>
             </View>
-          ))
+          ) : (
+            recetas.map((receta) => (
+              <View key={receta.id} style={s.recetaCard}>
+                <View style={s.recetaHeader}>
+                  <View style={s.recetaLeft}>
+                    <Text style={s.recetaNombre}>{receta.nombre}</Text>
+                    {receta.descripcion ? <Text style={s.recetaDesc} numberOfLines={1}>{receta.descripcion}</Text> : null}
+                  </View>
+                  <TouchableOpacity onPress={() => borrarReceta(receta)}><Text style={s.deleteBtn}>🗑️</Text></TouchableOpacity>
+                </View>
+                {receta.ingredientes && receta.ingredientes.length > 0 && (
+                  <View style={s.ingList}>
+                    {receta.ingredientes.map((ing, i) => (
+                      <View key={i} style={s.ingPill}><Text style={s.ingPillText}>{ing.nombre} {ing.gramos}g</Text></View>
+                    ))}
+                  </View>
+                )}
+                <View style={s.macrosRow}>
+                  {[
+                    { val: Math.round(safeNum(receta.calorias_total)), label: "kcal", color: "#4ADE80" },
+                    { val: Math.round(safeNum(receta.proteinas_total)) + "g", label: "Prot", color: "#60A5FA" },
+                    { val: Math.round(safeNum(receta.carbohidratos_total)) + "g", label: "Carbos", color: "#FBBF24" },
+                    { val: Math.round(safeNum(receta.grasas_total)) + "g", label: "Grasas", color: "#F87171" },
+                  ].map((item) => (
+                    <View key={item.label} style={s.macroBox}>
+                      <Text style={[s.macroVal, { color: item.color }]}>{item.val}</Text>
+                      <Text style={s.macroLabel}>{item.label}</Text>
+                    </View>
+                  ))}
+                </View>
+                <TouchableOpacity style={s.anadirBtn} onPress={() => setModalAnadir(receta)}>
+                  <Text style={s.anadirBtnText}>+ Añadir al día</Text>
+                </TouchableOpacity>
+              </View>
+            ))
+          )
+        ) : (
+          recetasGuardadas.length === 0 ? (
+            <View style={s.emptyWrap}>
+              <Text style={s.emptyIcon}>🔖</Text>
+              <Text style={s.emptyTitle}>Sin recetas guardadas</Text>
+              <Text style={s.emptyText}>Guarda recetas de la Comunidad para tenerlas aquí</Text>
+            </View>
+          ) : (
+            recetasGuardadas.map((rg) => (
+              <View key={rg.pub_id} style={s.recetaCard}>
+                <View style={s.recetaHeader}>
+                  <View style={s.recetaLeft}>
+                    <Text style={s.recetaNombre}>{rg.nombre}</Text>
+                    <Text style={s.recetaDesc} numberOfLines={1}>por {rg.autor}</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setConfirmarBorrarGuardada(rg)}>
+                    <Text style={s.deleteBtn}>🗑️</Text>
+                  </TouchableOpacity>
+                </View>
+                {rg.ingredientes && rg.ingredientes.length > 0 && (
+                  <View style={s.ingList}>
+                    {rg.ingredientes.map((ing: any, i: number) => (
+                      <View key={i} style={s.ingPill}><Text style={s.ingPillText}>{ing.nombre} {ing.gramos}g</Text></View>
+                    ))}
+                  </View>
+                )}
+                <View style={s.macrosRow}>
+                  {[
+                    { val: Math.round(safeNum(rg.calorias_total)), label: "kcal", color: "#4ADE80" },
+                    { val: Math.round(safeNum(rg.proteinas_total)) + "g", label: "Prot", color: "#60A5FA" },
+                    { val: Math.round(safeNum(rg.carbohidratos_total)) + "g", label: "Carbos", color: "#FBBF24" },
+                    { val: Math.round(safeNum(rg.grasas_total)) + "g", label: "Grasas", color: "#F87171" },
+                  ].map((item) => (
+                    <View key={item.label} style={s.macroBox}>
+                      <Text style={[s.macroVal, { color: item.color }]}>{item.val}</Text>
+                      <Text style={s.macroLabel}>{item.label}</Text>
+                    </View>
+                  ))}
+                </View>
+                <TouchableOpacity style={s.anadirBtn} onPress={() => setModalAnadirGuardada(rg)}>
+                  <Text style={s.anadirBtnText}>+ Añadir al día</Text>
+                </TouchableOpacity>
+              </View>
+            ))
+          )
         )}
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Modal añadir receta guardada al día */}
+      <Modal visible={!!modalAnadirGuardada} transparent animationType="fade" onRequestClose={() => setModalAnadirGuardada(null)}>
+        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setModalAnadirGuardada(null)}>
+          <TouchableOpacity activeOpacity={1} style={s.popup}>
+            <Text style={s.popupTitle}>{modalAnadirGuardada?.nombre}</Text>
+            <Text style={s.popupSubtitle}>¿A qué comida añadir?</Text>
+            <View style={s.mealSelector}>
+              {(Object.keys(MEAL_LABELS) as MealKey[]).map((m) => (
+                <TouchableOpacity key={m} style={[s.mealChip, mealSeleccionada === m && s.mealChipActive]} onPress={() => setMealSeleccionada(m)}>
+                  <Text style={s.mealChipIcon}>{MEAL_ICONS[m]}</Text>
+                  <Text style={[s.mealChipText, mealSeleccionada === m && s.mealChipTextActive]}>{MEAL_LABELS[m]}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={s.popupBtns}>
+              <TouchableOpacity style={s.cancelBtn} onPress={() => setModalAnadirGuardada(null)}><Text style={s.cancelText}>Cancelar</Text></TouchableOpacity>
+              <TouchableOpacity style={s.confirmBtn} onPress={() => modalAnadirGuardada && anadirGuardadaAlDia(modalAnadirGuardada, mealSeleccionada)}><Text style={s.confirmText}>Añadir</Text></TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Modal confirmación borrar receta */}
       <Modal visible={!!confirmarBorrar} transparent animationType="fade" onRequestClose={() => setConfirmarBorrar(null)}>
@@ -723,6 +854,24 @@ export default function RecetasScreen() {
               </TouchableOpacity>
               <TouchableOpacity style={[s.confirmBtn, { backgroundColor: "#EF4444" }]} onPress={confirmarEliminarReceta}>
                 <Text style={s.confirmText}>Eliminar</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Modal confirmación quitar receta guardada */}
+      <Modal visible={!!confirmarBorrarGuardada} transparent animationType="fade" onRequestClose={() => setConfirmarBorrarGuardada(null)}>
+        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setConfirmarBorrarGuardada(null)}>
+          <TouchableOpacity activeOpacity={1} style={s.popup}>
+            <Text style={s.popupTitle}>🗑️ Quitar receta guardada</Text>
+            <Text style={s.popupSubtitle}>¿Quitar "{confirmarBorrarGuardada?.nombre}" de tus guardadas? La receta seguirá disponible en Comunidad.</Text>
+            <View style={s.popupBtns}>
+              <TouchableOpacity style={s.cancelBtn} onPress={() => setConfirmarBorrarGuardada(null)}>
+                <Text style={s.cancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.confirmBtn, { backgroundColor: "#EF4444" }]} onPress={() => { if (confirmarBorrarGuardada) { quitarGuardada(confirmarBorrarGuardada.pub_id); setConfirmarBorrarGuardada(null); } }}>
+                <Text style={s.confirmText}>Quitar</Text>
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
@@ -790,6 +939,11 @@ function makeSStyles(c: any) { return StyleSheet.create({
   scroll: { flex: 1, paddingHorizontal: 16 },
   headerOuter: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8, gap: 8 },
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  tabsRow: { flexDirection: "row", backgroundColor: c.card, borderRadius: 12, padding: 4, borderWidth: 1, borderColor: c.cardBorder, gap: 4 },
+  tabBtn: { flex: 1, paddingVertical: 9, borderRadius: 9, alignItems: "center" },
+  tabBtnActive: { backgroundColor: "#1F6FEB" },
+  tabBtnText: { color: c.textMuted, fontSize: 13, fontWeight: "600" as const },
+  tabBtnTextActive: { color: "#fff", fontWeight: "700" as const },
   back: { color: "#58A6FF", fontSize: 14 },
   title: { color: c.text, fontSize: 26, fontWeight: "800" },
   newBtn: { backgroundColor: "#1F6FEB", borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8 },
