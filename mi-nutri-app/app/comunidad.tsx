@@ -607,9 +607,14 @@ export default function ComunidadScreen() {
             <Text style={s.title}>Comunidad</Text>
             <Text style={s.subtitle}>Recetas de otros usuarios</Text>
           </View>
-          <TouchableOpacity style={s.publishBtn} onPress={() => setModalPublicar(true)}>
-            <Text style={s.publishBtnText}>+ Publicar</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <TouchableOpacity style={[s.publishBtn, { backgroundColor: "#7C3AED22", borderColor: "#7C3AED55" }]} onPress={() => router.push("/reels")}>
+              <Text style={[s.publishBtnText, { color: "#A78BFA" }]}>📹 Reels</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.publishBtn} onPress={() => setModalPublicar(true)}>
+              <Text style={s.publishBtnText}>+ Publicar</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={s.filtros}>

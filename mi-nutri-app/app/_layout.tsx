@@ -296,6 +296,7 @@ export default function RootLayout() {
         <Stack.Screen name="create-food" options={{ headerShown: false }} />
         <Stack.Screen name="settings"    options={{ headerShown: false }} />
         <Stack.Screen name="comunidad"   options={{ headerShown: false }} />
+        <Stack.Screen name="reels"       options={{ headerShown: false }} />
         <Stack.Screen name="seguimiento" options={{ headerShown: false }} />
       </Stack>
     </AppContext.Provider>
