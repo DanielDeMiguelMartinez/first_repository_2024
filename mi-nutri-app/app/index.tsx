@@ -2,11 +2,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import { signalMealSaved, subscribeMealUpdates } from "./services/refreshSignal";
-import { useAvatar } from "./services/useAvatar";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Modal,
   PanResponder,
   Pressable,
@@ -470,7 +468,7 @@ function FoodRow({ food, onEdit, onDelete }: { food: FoodEntry; onEdit: () => vo
 export default function HomeScreen() {
   const router = useRouter();
   const { t, colors, theme, language } = useApp();
-  const avatarUri = useAvatar();
+
   const params = useLocalSearchParams<{ goToDate?: string }>();
 
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -889,9 +887,7 @@ export default function HomeScreen() {
                   <Text style={s.headerBtnText}>Comunidad</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={s.headerBtn} onPress={() => router.push("/settings")}>
-                  {avatarUri
-                    ? <Image source={{ uri: avatarUri }} style={{ width: 22, height: 22, borderRadius: 11 }} />
-                    : <Text style={s.headerBtnIcon}>⚙️</Text>}
+                  <Text style={s.headerBtnIcon}>⚙️</Text>
                   <Text style={s.headerBtnText}>{t.settings}</Text>
                 </TouchableOpacity>
               </View>
