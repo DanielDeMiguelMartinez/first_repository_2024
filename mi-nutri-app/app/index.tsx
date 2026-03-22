@@ -972,7 +972,7 @@ export default function HomeScreen() {
               <Text style={{ fontSize: 22 }}>🍽️</Text>
               <View>
                 <Text style={s.comerFueraTitulo}>Comer Fuera</Text>
-                <Text style={s.comerFueraSub}>Busca platos en FatSecret y Nutritionix</Text>
+                <Text style={s.comerFueraSub}>Busca platos con datos reales de FatSecret</Text>
               </View>
             </View>
             <Text style={s.comerFueraChevron}>{showComerFuera ? "▲" : "▼"}</Text>
@@ -1019,7 +1019,7 @@ export default function HomeScreen() {
               {loadingRestaurante && (
                 <View style={{ paddingVertical: 24, alignItems: "center", gap: 8 }}>
                   <ActivityIndicator color="#1F6FEB" />
-                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>Buscando en FatSecret y Nutritionix…</Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>Buscando en FatSecret…</Text>
                 </View>
               )}
 
@@ -1058,7 +1058,7 @@ export default function HomeScreen() {
               )}
 
               <Text style={s.comerFueraDisclaimer}>
-                Datos reales de FatSecret y Nutritionix. Los valores pueden variar según el restaurante.
+                Datos de FatSecret. Los valores pueden variar según el restaurante.
               </Text>
             </View>
           )}

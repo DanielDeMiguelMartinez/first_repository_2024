@@ -1,6 +1,6 @@
 /**
  * api/restaurant-search.js — Vercel serverless function
- * Proxies FatSecret + Nutritionix so secrets never reach the browser.
+ * Proxies FatSecret so secrets never reach the browser.
  *
  * GET /api/restaurant-search?q=paella
  * Returns: { results: Array<{ nombre, fuente, calorias, proteinas, carbs, grasas, porcion }> }
@@ -8,8 +8,6 @@
  * Env vars needed in Vercel:
  *   FATSECRET_CLIENT_ID
  *   FATSECRET_CLIENT_SECRET
- *   NUTRITIONIX_APP_ID
- *   NUTRITIONIX_API_KEY
  */
 
 let _fsToken = null;
@@ -106,39 +104,6 @@ async function searchFatSecret(q, token) {
   return results;
 }
 
-async function searchNutritionix(q) {
-  const appId = process.env.NUTRITIONIX_APP_ID || "";
-  const apiKey = process.env.NUTRITIONIX_API_KEY || "";
-  if (!appId || !apiKey) return [];
-
-  const headers = {
-    "x-app-id": appId,
-    "x-app-key": apiKey,
-    "Content-Type": "application/json",
-  };
-
-  try {
-    const res = await fetch("https://trackapi.nutritionix.com/v2/natural/nutrients", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ query: q }),
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.foods || []).map((f) => ({
-      nombre: (f.food_name || "").replace(/_/g, " "),
-      fuente: "Nutritionix",
-      calorias: Math.round(f.nf_calories || 0),
-      proteinas: +((f.nf_protein || 0).toFixed(1)),
-      carbs: +((f.nf_total_carbohydrate || 0).toFixed(1)),
-      grasas: +((f.nf_total_fat || 0).toFixed(1)),
-      porcion: `${f.serving_qty || 1} ${f.serving_unit || ""}`.trim(),
-    }));
-  } catch {
-    return [];
-  }
-}
-
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -151,28 +116,9 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const [tokenResult, nxResult] = await Promise.allSettled([
-      getFatSecretToken(),
-      searchNutritionix(q),
-    ]);
-
-    const token = tokenResult.status === "fulfilled" ? tokenResult.value : null;
-    const [fsResults, nxResults] = await Promise.all([
-      searchFatSecret(q, token),
-      Promise.resolve(nxResult.status === "fulfilled" ? nxResult.value : []),
-    ]);
-
-    // Nutritionix first (natural language = more accurate), then FatSecret
-    const seen = new Set();
-    const all = [];
-    for (const item of [...nxResults, ...fsResults]) {
-      const key = item.nombre.toLowerCase().trim();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      all.push(item);
-    }
-
-    res.status(200).json({ results: all });
+    const token = await getFatSecretToken();
+    const results = await searchFatSecret(q, token);
+    res.status(200).json({ results });
   } catch (err) {
     res.status(500).json({ error: String(err), results: [] });
   }
