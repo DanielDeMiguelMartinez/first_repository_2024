@@ -30,6 +30,7 @@ type Publicacion = {
   grasas_total: number;
   carbohidratos_total: number;
   autor: string;
+  autor_avatar: string | null;
   valoracion_media: number;
   total_valoraciones: number;
   creado_en: string;
@@ -39,6 +40,7 @@ type Valoracion = {
   id: string;
   publicacion_id: string;
   autor: string;
+  autor_avatar: string | null;
   estrellas: number;
   comentario: string;
   creado_en: string;
@@ -134,10 +136,10 @@ function ModalDetalle({
     setCargando(true);
     const { data } = await supabase
       .from("valoraciones_recetas")
-      .select("*")
+      .select("id, publicacion_id, autor, autor_avatar, estrellas, comentario, creado_en")
       .eq("publicacion_id", pub.id)
       .order("creado_en", { ascending: false });
-    setValoraciones(data || []);
+    setValoraciones((data || []).map((v: any) => ({ ...v, autor_avatar: v.autor_avatar ?? null })));
     setCargando(false);
   };
 
@@ -148,6 +150,7 @@ function ModalDetalle({
     const { error } = await supabase.from("valoraciones_recetas").insert([{
       publicacion_id: pub.id,
       autor: nombreUsuario || "Anónimo",
+      autor_avatar: avatarUri || null,
       estrellas,
       comentario: comentario.trim(),
     }]);
@@ -349,8 +352,8 @@ function ModalDetalle({
                   <View key={v.id} style={d.commentCard}>
                     <View style={d.commentHeader}>
                       <View style={d.commentAuthorRow}>
-                        {v.autor === nombreUsuario && avatarUri
-                          ? <Image source={{ uri: avatarUri }} style={{ width: 32, height: 32, borderRadius: 16, marginRight: 8 }} />
+                        {(v.autor === nombreUsuario ? avatarUri : null) ?? v.autor_avatar
+                          ? <Image source={{ uri: (v.autor === nombreUsuario ? avatarUri : null) ?? v.autor_avatar! }} style={{ width: 32, height: 32, borderRadius: 16, marginRight: 8 }} />
                           : <View style={d.avatar}><Text style={d.avatarText}>{(v.autor || "A")[0].toUpperCase()}</Text></View>
                         }
                         <View>
@@ -379,11 +382,13 @@ function ModalPublicar({
   onClose,
   onPublicado,
   nombreUsuario,
+  avatarUri,
 }: {
   visible: boolean;
   onClose: () => void;
   onPublicado: () => void;
   nombreUsuario: string;
+  avatarUri?: string | null;
 }) {
   const { colors, theme } = useApp();
   const [recetas, setRecetas] = useState<Receta[]>([]);
@@ -423,6 +428,7 @@ function ModalPublicar({
       grasas_total: safeNum(seleccionada.grasas_total),
       carbohidratos_total: safeNum(seleccionada.carbohidratos_total),
       autor: nombreUsuario || "Anónimo",
+      autor_avatar: avatarUri || null,
     }]);
     setPublicando(false);
     if (error) { Alert.alert("Error", "No se pudo publicar."); return; }
@@ -552,6 +558,7 @@ export default function ComunidadScreen() {
         grasas_total: safeNum(item.grasas_total),
         carbohidratos_total: safeNum(item.carbohidratos_total),
         autor: item.autor ?? "Anónimo",
+        autor_avatar: item.autor_avatar ?? null,
         valoracion_media: safeNum(item.valoracion_media),
         total_valoraciones: safeNum(item.total_valoraciones),
         creado_en: item.creado_en ?? new Date().toISOString(),
@@ -592,6 +599,7 @@ export default function ComunidadScreen() {
         onClose={() => setModalPublicar(false)}
         onPublicado={cargarPublicaciones}
         nombreUsuario={nombreUsuario}
+        avatarUri={avatarUri}
       />
 
       <View style={s.header}>
@@ -654,8 +662,8 @@ export default function ComunidadScreen() {
               activeOpacity={0.7}
             >
               <View style={s.cardHeader}>
-                {pub.autor === nombreUsuario && avatarUri
-                  ? <Image source={{ uri: avatarUri }} style={{ width: 34, height: 34, borderRadius: 17, marginRight: 8 }} />
+                {(pub.autor === nombreUsuario ? avatarUri : null) ?? pub.autor_avatar
+                  ? <Image source={{ uri: ((pub.autor === nombreUsuario ? avatarUri : null) ?? pub.autor_avatar)! }} style={{ width: 34, height: 34, borderRadius: 17, marginRight: 8 }} />
                   : <View style={s.avatarSmall}><Text style={s.avatarSmallText}>{(pub.autor || "A")[0].toUpperCase()}</Text></View>
                 }
                 <View style={s.cardAuthorInfo}>
