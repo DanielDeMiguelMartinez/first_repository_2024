@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator, Alert, Animated, Dimensions, Modal, PanResponder,
   Platform, ScrollView, StatusBar, StyleSheet, Text, TextInput,
-  TouchableOpacity, View,
+  TouchableOpacity, View, useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -63,6 +63,8 @@ function VideoPlayer({ url, active, muted, onToggleMute, filtro }: {
 }) {
   const filterCss = filtro ? (FILTERS.find(f => f.name === filtro)?.webCss ?? "") : "";
   const ref = useRef<any>(null);
+  const fsRef = useRef<any>(null);
+  const [webFullscreen, setWebFullscreen] = useState(false);
 
   // Play / pause según si el reel está activo
   useEffect(() => {
@@ -75,17 +77,19 @@ function VideoPlayer({ url, active, muted, onToggleMute, filtro }: {
     }
   }, [active]);
 
+  // Al abrir fullscreen: sincronizar posición y arrancar
+  useEffect(() => {
+    if (Platform.OS !== "web" || !webFullscreen || !fsRef.current) return;
+    if (ref.current) fsRef.current.currentTime = ref.current.currentTime ?? 0;
+    fsRef.current.play?.().catch(() => {});
+  }, [webFullscreen]);
+
   // Mute / unmute sin recargar el vídeo
   useEffect(() => {
-    if (Platform.OS !== "web" || !ref.current) return;
-    ref.current.muted = muted;
+    if (Platform.OS !== "web") return;
+    if (ref.current) ref.current.muted = muted;
+    if (fsRef.current) fsRef.current.muted = muted;
   }, [muted]);
-
-  const goFullscreen = () => {
-    const v = ref.current;
-    if (!v) return;
-    (v.requestFullscreen ?? v.webkitRequestFullscreen ?? v.webkitEnterFullscreen)?.call(v);
-  };
 
   if (Platform.OS === "web") {
     return (
@@ -93,17 +97,17 @@ function VideoPlayer({ url, active, muted, onToggleMute, filtro }: {
         {(React.createElement as any)("video", {
           ref,
           src: url,
-          // preload inteligente: el activo carga todo, el resto solo metadatos
           preload: active ? "auto" : "metadata",
           style: {
             width: "100%", height: "100%",
-            objectFit: "contain",
+            objectFit: "cover",
             display: "block",
             backgroundColor: "#000",
             ...(filterCss ? { filter: filterCss } : {}),
           },
-          muted: true,   // el atributo inicial; se controla por ref
+          muted: true,
           loop: true,
+          autoPlay: active,
           playsInline: true,
         })}
         {/* Controles superpuestos */}
@@ -111,10 +115,39 @@ function VideoPlayer({ url, active, muted, onToggleMute, filtro }: {
           <TouchableOpacity style={vid.btn} onPress={onToggleMute}>
             <Text style={vid.btnTxt}>{muted ? "🔇" : "🔊"}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={vid.btn} onPress={goFullscreen}>
+          <TouchableOpacity style={vid.btn} onPress={() => setWebFullscreen(true)}>
             <Text style={vid.btnTxt}>⛶</Text>
           </TouchableOpacity>
         </View>
+        {/* Fullscreen personalizado — conserva el filtro CSS */}
+        {webFullscreen && (
+          <Modal visible transparent animationType="fade" onRequestClose={() => setWebFullscreen(false)}>
+            <View style={{ flex: 1, backgroundColor: "#000" }}>
+              {(React.createElement as any)("video", {
+                ref: fsRef,
+                src: url,
+                style: {
+                  width: "100%", height: "100%",
+                  objectFit: "contain",
+                  display: "block",
+                  ...(filterCss ? { filter: filterCss } : {}),
+                },
+                muted: true,
+                loop: true,
+                autoPlay: true,
+                playsInline: true,
+              })}
+              <View style={{ position: "absolute", top: 48, right: 14, gap: 10 }}>
+                <TouchableOpacity style={vid.btn} onPress={onToggleMute}>
+                  <Text style={vid.btnTxt}>{muted ? "🔇" : "🔊"}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={vid.btn} onPress={() => setWebFullscreen(false)}>
+                  <Text style={vid.btnTxt}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+        )}
       </View>
     );
   }
@@ -141,6 +174,7 @@ function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, o
   liked: boolean; onLike: () => void; seguido: boolean; onFollow: () => void;
   esMio: boolean; onDelete: () => void; onVerReceta: () => void;
 }) {
+  const { width: SW, height: SH } = useWindowDimensions();
   const [showDesc, setShowDesc] = useState(false);
 
   return (
@@ -841,6 +875,9 @@ export default function ReelsScreen() {
   const [cargandoReceta, setCargandoReceta] = useState(false);
   const [likedHashtags, setLikedHashtags] = useState<Set<string>>(new Set());
   const [hashtagActivo, setHashtagActivo] = useState<string | null>(null);
+  const { width: SW, height: SH } = useWindowDimensions();
+  const [guardandoRecetaExt, setGuardandoRecetaExt] = useState(false);
+  const [recetaGuardada, setRecetaGuardada] = useState(false);
 
   // Si viene desde recetas.tsx con una receta pre-seleccionada
   useEffect(() => {
@@ -976,6 +1013,8 @@ export default function ReelsScreen() {
     setModalReceta(reel);
     setRecetaDetalle(null);
     setCargandoReceta(true);
+    setRecetaGuardada(false);
+    setGuardandoRecetaExt(false);
     const { data } = await supabase
       .from("recetas")
       .select("nombre,descripcion,ingredientes,calorias_total,proteinas_total,grasas_total,carbohidratos_total")
@@ -1175,6 +1214,41 @@ export default function ReelsScreen() {
                     No se encontraron detalles de esta receta
                   </Text>
                 ) : null}
+
+                {/* Botón guardar receta en mis recetas */}
+                {userId && recetaDetalle && (
+                  <TouchableOpacity
+                    style={{
+                      backgroundColor: recetaGuardada ? "#15803D" : "#1F6FEB",
+                      borderRadius: 14, padding: 14, alignItems: "center",
+                      marginTop: 14, opacity: guardandoRecetaExt ? 0.7 : 1,
+                    }}
+                    onPress={async () => {
+                      if (recetaGuardada || guardandoRecetaExt) return;
+                      setGuardandoRecetaExt(true);
+                      const ok = await crearReceta({
+                        nombre: recetaDetalle.nombre,
+                        descripcion: recetaDetalle.descripcion ?? "",
+                        ingredientes: recetaDetalle.ingredientes ?? [],
+                        calorias_total: recetaDetalle.calorias_total ?? 0,
+                        proteinas_total: recetaDetalle.proteinas_total ?? 0,
+                        grasas_total: recetaDetalle.grasas_total ?? 0,
+                        carbohidratos_total: recetaDetalle.carbohidratos_total ?? 0,
+                      });
+                      setGuardandoRecetaExt(false);
+                      if (ok) { setRecetaGuardada(true); Alert.alert("✓ Guardada", "Receta añadida a tus recetas"); }
+                      else Alert.alert("Error", "No se pudo guardar la receta");
+                    }}
+                    disabled={guardandoRecetaExt || recetaGuardada}
+                  >
+                    {guardandoRecetaExt
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Text style={{ color: "#fff", fontWeight: "800", fontSize: 14 }}>
+                          {recetaGuardada ? "✓ Receta guardada" : "💾 Guardar en mis recetas"}
+                        </Text>
+                    }
+                  </TouchableOpacity>
+                )}
 
                 <View style={{ height: 8 }} />
               </ScrollView>
