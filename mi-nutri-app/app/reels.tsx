@@ -277,6 +277,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
   const [camPerm, requestCamPerm] = useCameraPermissions();
   const [micPerm, requestMicPerm] = useMicrophonePermissions();
   const [filterStripVisible, setFilterStripVisible] = useState(false);
+  const [cameraTransition, setCameraTransition] = useState(false);
   const recBtnAnim = useRef(new Animated.Value(0)).current;
   const recBtnPR = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => !recording,
@@ -320,7 +321,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
   const limpiar = () => {
     setStep("receta"); setRecetaElegida(""); setModoCrear(false);
     setNuevaNombre(""); setNuevaDesc(""); setNuevaKcal(""); setNuevaProt(""); setNuevaCarbos(""); setNuevaGrasas("");
-    setRecording(false); setDuration(0);
+    setRecording(false); setDuration(0); setCameraTransition(false);
     if (durTimerRef.current) clearInterval(durTimerRef.current);
     setVideoFile(null);
     if (webPreview) URL.revokeObjectURL(webPreview);
@@ -349,21 +350,23 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
     durTimerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
     try {
       const video = await (cameraRef.current as any).recordAsync({ maxDuration: 120 });
-      // Limpiamos el estado ANTES de cambiar step para evitar flips visuales
       if (durTimerRef.current) clearInterval(durTimerRef.current);
+      setCameraTransition(true); // Ocultar cámara inmediatamente para evitar el "flip"
       setRecording(false);
       if (video?.uri) {
         const ext = (video.uri.split("/").pop()?.split(".").pop() ?? "mp4").split("?")[0].toLowerCase();
         setVideoFile({ uri: video.uri, type: `video/${ext}`, name: `reel.${ext}`, isNative: true });
-        setStep("detalles"); // Avance automático, sin pantalla intermedia
+        setStep("detalles");
       }
     } catch {
       if (durTimerRef.current) clearInterval(durTimerRef.current);
+      setCameraTransition(false);
       setRecording(false);
     }
   };
 
   const stopRecording = () => {
+    setCameraTransition(true); // Pantalla negra inmediata → elimina el "flip" al parar
     (cameraRef.current as any)?.stopRecording?.();
     if (durTimerRef.current) clearInterval(durTimerRef.current);
   };
@@ -744,6 +747,10 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
               </View>
             </CameraView>
           )}
+          {/* Overlay negro: oculta la cámara durante la transición para evitar el "flip" visual */}
+          {cameraTransition && (
+            <View style={[StyleSheet.absoluteFillObject, { backgroundColor: "#000", zIndex: 999 }]} pointerEvents="none" />
+          )}
         </View>
       )}
 
@@ -836,9 +843,6 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
               </Text>
               <Text style={{ color: userId ? "#4ADE80" : "#EF4444", fontSize: 12 }}>
                 {userId ? "✓ Sesión activa" : "✗ No hay sesión — cierra y vuelve a abrir"}
-              </Text>
-              <Text style={{ color: "#FBBF24", fontSize: 11, marginTop: 4 }}>
-                ⚠️ Necesitas el bucket "videos" en Supabase Storage → Public
               </Text>
             </View>
 
