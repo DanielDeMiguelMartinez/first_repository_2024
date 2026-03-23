@@ -49,6 +49,9 @@ export default function SettingsScreen() {
   const [userEmail, setUserEmail] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  const [confirmarBorrarFoto, setConfirmarBorrarFoto] = useState(false);
+  const [confirmarCerrarCuenta, setConfirmarCerrarCuenta] = useState(false);
+  const [cerrandoCuenta, setCerrandoCuenta] = useState(false);
 
   const s = makeStyles(colors);
 
@@ -222,6 +225,34 @@ export default function SettingsScreen() {
     setGuardando(false);
   };
 
+  const handleDeleteAvatar = async () => {
+    setConfirmarBorrarFoto(false);
+    setAvatarUri(null);
+    await AsyncStorage.removeItem(AVATAR_KEY);
+    if (userId) {
+      await supabase.from("perfiles").update({ avatar_url: null }).eq("id", userId);
+    }
+  };
+
+  const handleCerrarCuenta = async () => {
+    if (!userId) return;
+    setCerrandoCuenta(true);
+    try {
+      // Borrar datos del usuario
+      await Promise.all([
+        supabase.from("seguidos").delete().eq("follower_id", userId),
+        supabase.from("seguidos").delete().eq("followed_id", userId),
+        supabase.from("videos_recetas").delete().eq("autor_id", userId),
+      ]);
+      await supabase.from("perfiles").delete().eq("id", userId);
+      // Eliminar la cuenta de autenticación (requiere función SQL delete_current_user)
+      await supabase.rpc("delete_current_user");
+    } catch {}
+    await AsyncStorage.clear();
+    await supabase.auth.signOut();
+    router.replace("/auth");
+  };
+
   const handleLogout = () => {
     Alert.alert("Cerrar sesión", "¿Seguro que quieres cerrar sesión?", [
       { text: "Cancelar", style: "cancel" },
@@ -327,6 +358,48 @@ export default function SettingsScreen() {
         </View>
       </Modal>
 
+      {/* Modal: confirmar borrar foto */}
+      <Modal visible={confirmarBorrarFoto} transparent animationType="fade" onRequestClose={() => setConfirmarBorrarFoto(false)}>
+        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setConfirmarBorrarFoto(false)}>
+          <TouchableOpacity activeOpacity={1} style={s.popup}>
+            <Text style={s.popupTitle}>🗑️ Eliminar foto de perfil</Text>
+            <Text style={s.popupSubtitle}>¿Seguro que quieres eliminar tu foto de perfil? Se borrará en todos tus dispositivos.</Text>
+            <View style={s.popupBtns}>
+              <TouchableOpacity style={s.cancelBtn} onPress={() => setConfirmarBorrarFoto(false)}>
+                <Text style={s.cancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.confirmBtn, { backgroundColor: "#EF4444" }]} onPress={handleDeleteAvatar}>
+                <Text style={s.confirmText}>Eliminar</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Modal: confirmar cerrar cuenta */}
+      <Modal visible={confirmarCerrarCuenta} transparent animationType="fade" onRequestClose={() => !cerrandoCuenta && setConfirmarCerrarCuenta(false)}>
+        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => !cerrandoCuenta && setConfirmarCerrarCuenta(false)}>
+          <TouchableOpacity activeOpacity={1} style={s.popup}>
+            <Text style={s.popupTitle}>⚠️ Cerrar cuenta</Text>
+            <Text style={s.popupSubtitle}>
+              {"Esta acción eliminará permanentemente tu cuenta y todos tus datos (perfil, recetas, publicaciones, reels).\n\nEsta acción NO se puede deshacer."}
+            </Text>
+            <View style={s.popupBtns}>
+              <TouchableOpacity style={s.cancelBtn} onPress={() => setConfirmarCerrarCuenta(false)} disabled={cerrandoCuenta}>
+                <Text style={s.cancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.confirmBtn, { backgroundColor: "#EF4444" }, cerrandoCuenta && { opacity: 0.6 }]}
+                onPress={handleCerrarCuenta}
+                disabled={cerrandoCuenta}
+              >
+                <Text style={s.confirmText}>{cerrandoCuenta ? "Eliminando..." : "Sí, eliminar"}</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
         <View style={s.header}>
           <TouchableOpacity onPress={() => router.back()}>
@@ -339,14 +412,24 @@ export default function SettingsScreen() {
           <View style={s.section}>
             <Text style={s.sectionLabel}>👤 Mi perfil</Text>
             <View style={s.profileCard}>
-              <TouchableOpacity style={s.profileAvatar} onPress={handlePickAvatar} activeOpacity={0.8}>
-                {avatarUri
-                  ? <Image source={{ uri: avatarUri }} style={{ width: 56, height: 56, borderRadius: 28 }} />
-                  : <Text style={{ fontSize: 32 }}>{profile.sexo === "hombre" ? "♂️" : "♀️"}</Text>}
-                <View style={{ position: "absolute", bottom: -2, right: -2, backgroundColor: "#1F6FEB", borderRadius: 10, width: 20, height: 20, alignItems: "center", justifyContent: "center" }}>
-                  <Text style={{ color: "#fff", fontSize: 11 }}>📷</Text>
-                </View>
-              </TouchableOpacity>
+              <View>
+                <TouchableOpacity style={s.profileAvatar} onPress={handlePickAvatar} activeOpacity={0.8}>
+                  {avatarUri
+                    ? <Image source={{ uri: avatarUri }} style={{ width: 56, height: 56, borderRadius: 28 }} />
+                    : <Text style={{ fontSize: 32 }}>{profile.sexo === "hombre" ? "♂️" : "♀️"}</Text>}
+                  <View style={{ position: "absolute", bottom: -2, right: -2, backgroundColor: "#1F6FEB", borderRadius: 10, width: 20, height: 20, alignItems: "center", justifyContent: "center" }}>
+                    <Text style={{ color: "#fff", fontSize: 11 }}>📷</Text>
+                  </View>
+                </TouchableOpacity>
+                {avatarUri ? (
+                  <TouchableOpacity
+                    style={{ position: "absolute", top: -4, left: -4, backgroundColor: "#EF4444", borderRadius: 10, width: 20, height: 20, alignItems: "center", justifyContent: "center", zIndex: 10 }}
+                    onPress={() => setConfirmarBorrarFoto(true)}
+                  >
+                    <Text style={{ color: "#fff", fontSize: 10, fontWeight: "800" }}>✕</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: colors.text, fontSize: 17, fontWeight: "800" }}>{profile.nombre}</Text>
                 <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>{userEmail}</Text>
@@ -410,6 +493,10 @@ export default function SettingsScreen() {
           <Text style={s.logoutText}>🚪 Cerrar sesión</Text>
         </TouchableOpacity>
 
+        <TouchableOpacity style={s.deleteAccountBtn} onPress={() => setConfirmarCerrarCuenta(true)}>
+          <Text style={s.deleteAccountText}>⚠️ Cerrar cuenta permanentemente</Text>
+        </TouchableOpacity>
+
         <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
@@ -444,6 +531,17 @@ function makeStyles(colors: ReturnType<typeof import("./services/i18n").useApp>[
     editChipTextActive: { color: "#58A6FF", fontWeight: "700" },
     logoutBtn: { backgroundColor: "#EF444422", borderRadius: 14, padding: 16, alignItems: "center", borderWidth: 1, borderColor: "#EF444455", marginBottom: 8 },
     logoutText: { color: "#EF4444", fontSize: 15, fontWeight: "700" },
+    deleteAccountBtn: { borderRadius: 14, padding: 14, alignItems: "center", borderWidth: 1, borderColor: "#EF444433", marginBottom: 8 },
+    deleteAccountText: { color: "#EF444488", fontSize: 13, fontWeight: "600" },
+    overlay: { flex: 1, backgroundColor: "#000000AA", justifyContent: "center", alignItems: "center", padding: 20 },
+    popup: { backgroundColor: colors.card, borderRadius: 24, padding: 24, width: "100%", borderWidth: 1, borderColor: colors.cardBorder, gap: 16 },
+    popupTitle: { color: colors.text, fontSize: 18, fontWeight: "800" },
+    popupSubtitle: { color: colors.textMuted, fontSize: 13, lineHeight: 20 },
+    popupBtns: { flexDirection: "row" as const, gap: 10 },
+    cancelBtn: { flex: 1, backgroundColor: colors.cardBorder, borderRadius: 12, padding: 14, alignItems: "center" as const },
+    cancelText: { color: colors.textSub, fontWeight: "700" as const, fontSize: 15 },
+    confirmBtn: { flex: 1, borderRadius: 12, padding: 14, alignItems: "center" as const },
+    confirmText: { color: "#fff", fontWeight: "700" as const, fontSize: 15 },
     optionsRow: { flexDirection: "row", gap: 10 },
     optionChip: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.inputBg, borderWidth: 1, borderColor: colors.inputBorder, borderRadius: 14, padding: 14 },
     optionChipActive: { backgroundColor: "#1F6FEB22", borderColor: "#58A6FF" },
