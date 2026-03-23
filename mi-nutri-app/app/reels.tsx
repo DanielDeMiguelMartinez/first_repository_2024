@@ -1,23 +1,51 @@
 import { useApp } from "@/app/services/i18n";
 import { crearReceta, supabase } from "@/app/services/supabase";
-import { useAvatar } from "@/app/services/useAvatar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
+import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Dimensions, Modal, Platform,
-  SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput,
+  ActivityIndicator, Alert, Animated, Dimensions, Modal, PanResponder,
+  Platform, ScrollView, StatusBar, StyleSheet, Text, TextInput,
   TouchableOpacity, View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width: SW, height: SH } = Dimensions.get("window");
-const LIKED_KEY = "nutri_liked_videos";
+const LIKED_KEY          = "nutri_liked_videos";
+const LIKED_HASHTAGS_KEY = "nutri_liked_hashtags";
+
+// Filtros disponibles — usado tanto en ModalSubir (cámara) como en VideoPlayer (playback web)
+const FILTERS = [
+  { name: "Normal",  icon: "○",  webCss: "",                                               overlay: "transparent", opacity: 0 },
+  { name: "Vivido",  icon: "🌈", webCss: "saturate(1.9) contrast(1.1)",                    overlay: "#FF4400",     opacity: 0.06 },
+  { name: "Cálido",  icon: "🌅", webCss: "sepia(0.35) saturate(1.5) brightness(1.05)",     overlay: "#FF7700",     opacity: 0.10 },
+  { name: "Frío",    icon: "❄️", webCss: "hue-rotate(20deg) saturate(1.3) brightness(1.02)", overlay: "#3388FF",   opacity: 0.08 },
+  { name: "B&N",     icon: "◑",  webCss: "grayscale(1) contrast(1.15)",                   overlay: "#888888",     opacity: 0.30 },
+  { name: "Fade",    icon: "☁️", webCss: "brightness(1.15) contrast(0.8) saturate(0.7)",  overlay: "#ffffff",     opacity: 0.14 },
+  { name: "Cine",    icon: "🎞️", webCss: "contrast(1.25) brightness(0.88) saturate(1.4)", overlay: "#000000",     opacity: 0.10 },
+];
 
 type Reel = {
   id: string; autor: string; autor_id: string;
   titulo: string; descripcion: string; video_url: string;
-  likes: number; creado_en: string;
+  likes: number; views: number; creado_en: string;
+  hashtags: string[]; filtro?: string;
 };
+
+// ── Algoritmo de engagement ───────────────────────────────────────────────────
+// Mezcla recencia, tasa de engagement (likes/vistas), popularidad absoluta
+// y personalización (si el usuario ha interactuado con esos hashtags antes).
+function scoreReel(reel: Reel, likedHashtagSet: Set<string>): number {
+  const ageHours  = (Date.now() - new Date(reel.creado_en).getTime()) / 3_600_000;
+  const recency   = Math.exp(-ageHours / 72);                                    // semivida 3 días
+  const likesScore = Math.log1p(reel.likes) / 8;                                 // escala log
+  const viewsScore = Math.log1p(reel.views) / 10;
+  const engRate    = reel.views > 5 ? Math.min(reel.likes / reel.views, 1) : 0;  // viral boost
+  const personal   = reel.hashtags?.some(h => likedHashtagSet.has(h)) ? 0.10 : 0;
+  return recency * 0.40 + likesScore * 0.20 + engRate * 0.25 + viewsScore * 0.05 + personal;
+}
 type RecetaItem = { id: string; nombre: string; descripcion?: string };
 
 function timeAgo(d: string) {
@@ -30,9 +58,10 @@ function timeAgo(d: string) {
 }
 
 // ─── Reproductor ──────────────────────────────────────────────────────────────
-function VideoPlayer({ url, active, muted, onToggleMute }: {
-  url: string; active: boolean; muted: boolean; onToggleMute: () => void;
+function VideoPlayer({ url, active, muted, onToggleMute, filtro }: {
+  url: string; active: boolean; muted: boolean; onToggleMute: () => void; filtro?: string;
 }) {
+  const filterCss = filtro ? (FILTERS.find(f => f.name === filtro)?.webCss ?? "") : "";
   const ref = useRef<any>(null);
 
   // Play / pause según si el reel está activo
@@ -68,9 +97,10 @@ function VideoPlayer({ url, active, muted, onToggleMute }: {
           preload: active ? "auto" : "metadata",
           style: {
             width: "100%", height: "100%",
-            objectFit: "contain",   // máxima resolución sin recorte
+            objectFit: "contain",
             display: "block",
             backgroundColor: "#000",
+            ...(filterCss ? { filter: filterCss } : {}),
           },
           muted: true,   // el atributo inicial; se controla por ref
           loop: true,
@@ -116,11 +146,11 @@ function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, o
   return (
     <View style={{ width: SW, height: SH, backgroundColor: "#000" }}>
       <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowDesc(v => !v)}>
-        <VideoPlayer url={reel.video_url} active={active} muted={muted} onToggleMute={onToggleMute} />
+        <VideoPlayer url={reel.video_url} active={active} muted={muted} onToggleMute={onToggleMute} filtro={reel.filtro} />
       </TouchableOpacity>
 
       {/* Sombra inferior */}
-      <View style={r.shadow} pointerEvents="none" />
+      <View style={[r.shadow, { background: "linear-gradient(transparent,rgba(0,0,0,0.85))" } as any]} pointerEvents="none" />
 
       {/* Info izquierda abajo */}
       <View style={r.info} pointerEvents="none">
@@ -131,7 +161,12 @@ function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, o
         ) : reel.descripcion ? (
           <Text style={r.hint}>Toca para ver descripción</Text>
         ) : null}
-        <Text style={r.time}>{timeAgo(reel.creado_en)}</Text>
+        {reel.hashtags?.length > 0 && (
+          <Text style={r.hashtags} numberOfLines={1}>
+            {reel.hashtags.slice(0, 5).map(h => `#${h}`).join(" ")}
+          </Text>
+        )}
+        <Text style={r.time}>{timeAgo(reel.creado_en)} · {reel.views ?? 0} vistas</Text>
       </View>
 
       {/* Acciones derecha */}
@@ -151,7 +186,7 @@ function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, o
         )}
         <TouchableOpacity style={r.actionBtn} onPress={onLike}>
           <Text style={r.actionIcon}>{liked ? "❤️" : "🤍"}</Text>
-          <Text style={r.actionLbl}>{reel.likes + (liked ? 1 : 0)}</Text>
+          <Text style={r.actionLbl}>{reel.likes}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={r.actionBtn} onPress={onVerReceta}>
           <Text style={r.actionIcon}>📋</Text>
@@ -163,13 +198,14 @@ function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, o
 }
 
 const r = StyleSheet.create({
-  shadow: { position: "absolute", bottom: 0, left: 0, right: 0, height: 280, background: "linear-gradient(transparent,rgba(0,0,0,0.85))" as any },
+  shadow: { position: "absolute", bottom: 0, left: 0, right: 0, height: 280 },
   info: { position: "absolute", bottom: 30, left: 14, right: 80, gap: 5 },
   autor: { color: "#fff", fontWeight: "800", fontSize: 15, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
   titulo: { color: "#fff", fontWeight: "700", fontSize: 14, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
   desc: { color: "rgba(255,255,255,0.85)", fontSize: 12, lineHeight: 17 },
-  hint: { color: "rgba(255,255,255,0.4)", fontSize: 11 },
-  time: { color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 2 },
+  hint:     { color: "rgba(255,255,255,0.4)", fontSize: 11 },
+  hashtags: { color: "#60A5FA", fontSize: 12, fontWeight: "600", textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
+  time:     { color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 2 },
   actions: { position: "absolute", bottom: 24, right: 12, gap: 20, alignItems: "center" },
   actionBtn: { alignItems: "center", gap: 3 },
   actionIcon: { fontSize: 30, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
@@ -178,17 +214,18 @@ const r = StyleSheet.create({
   circleActive: { backgroundColor: "#1F6FEB", borderColor: "#1F6FEB" },
 });
 
-// ─── Modal subir reel ─────────────────────────────────────────────────────────
+// ─── Modal subir reel — 3 pasos: Receta → Cámara → Detalles ──────────────────
 function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaPrevia }: {
   visible: boolean; onClose: () => void; onSubido: () => void;
   nombreUsuario: string; userId: string; recetaPrevia?: string;
 }) {
   const { colors } = useApp();
-  const [step, setStep] = useState<"receta" | "video">("receta");
+  const [step, setStep] = useState<"receta" | "camara" | "detalles">("receta");
+
+  // ── Paso 1: Receta ────────────────────────────────────────────────────────
   const [recetas, setRecetas] = useState<RecetaItem[]>([]);
-  const [recetaElegida, setRecetaElegida] = useState<string>(recetaPrevia ?? "");
+  const [recetaElegida, setRecetaElegida] = useState(recetaPrevia ?? "");
   const [modoCrear, setModoCrear] = useState(false);
-  // Campos crear receta nueva
   const [nuevaNombre, setNuevaNombre] = useState("");
   const [nuevaDesc, setNuevaDesc] = useState("");
   const [nuevaKcal, setNuevaKcal] = useState("");
@@ -196,139 +233,237 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
   const [nuevaCarbos, setNuevaCarbos] = useState("");
   const [nuevaGrasas, setNuevaGrasas] = useState("");
   const [guardandoReceta, setGuardandoReceta] = useState(false);
-  const [descripcion, setDescripcion] = useState("");
+
+  // ── Paso 2: Cámara ────────────────────────────────────────────────────────
+  const cameraRef = useRef<CameraView>(null);
+  const [facing, setFacing] = useState<"front" | "back">("back");
+  const [recording, setRecording] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const durTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [camPerm, requestCamPerm] = useCameraPermissions();
+  const [micPerm, requestMicPerm] = useMicrophonePermissions();
+  const [filterStripVisible, setFilterStripVisible] = useState(false);
+  const recBtnAnim = useRef(new Animated.Value(0)).current;
+  const recBtnPR = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => !recording,
+    onMoveShouldSetPanResponder: (_e, g) => !recording && Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy),
+    onPanResponderMove: (_e, g) => {
+      if (g.dx > 0) recBtnAnim.setValue(Math.min(g.dx, 90));
+    },
+    onPanResponderRelease: (_e, g) => {
+      if (g.dx > 40) setFilterStripVisible(v => !v);
+      Animated.spring(recBtnAnim, { toValue: 0, useNativeDriver: true }).start();
+    },
+  })).current;
+
+  // ── Paso 3: Detalles ──────────────────────────────────────────────────────
   const [videoFile, setVideoFile] = useState<any>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [webPreview, setWebPreview] = useState<string | null>(null);
+  const [descripcion, setDescripcion] = useState("");
+  const [hashtagsInput, setHashtagsInput] = useState("");
   const [subiendo, setSubiendo] = useState(false);
   const [progreso, setProgreso] = useState(0);
+  const [selectedFilter, setSelectedFilter] = useState("Normal");
 
-  // Cargar recetas del usuario cuando abre el modal
+  // Cargar recetas al abrir
   useEffect(() => {
     if (!visible || !userId) return;
     supabase.from("recetas").select("id,nombre,descripcion")
-      .order("creado_en", { ascending: false })
+      .order("creado_en", { ascending: false }).limit(100)
       .then(({ data }) => setRecetas((data ?? []) as RecetaItem[]));
-    // Si viene con receta previa, pasar directo al paso de vídeo
-    if (recetaPrevia) { setRecetaElegida(recetaPrevia); setStep("video"); }
+    if (recetaPrevia) { setRecetaElegida(recetaPrevia); setStep("camara"); }
     else { setStep("receta"); setRecetaElegida(""); }
   }, [visible, userId, recetaPrevia]);
+
+  // Pedir permisos en cuanto se abre el modal (no al cambiar de step)
+  // Así al llegar al paso cámara ya están concedidos y se abre sola
+  useEffect(() => {
+    if (!visible || Platform.OS === "web") return;
+    if (!camPerm?.granted) requestCamPerm();
+    if (!micPerm?.granted) requestMicPerm();
+  }, [visible]);
 
   const limpiar = () => {
     setStep("receta"); setRecetaElegida(""); setModoCrear(false);
     setNuevaNombre(""); setNuevaDesc(""); setNuevaKcal(""); setNuevaProt(""); setNuevaCarbos(""); setNuevaGrasas("");
-    setDescripcion(""); setVideoFile(null); setPreview(null); setSubiendo(false); setProgreso(0);
+    setRecording(false); setDuration(0);
+    if (durTimerRef.current) clearInterval(durTimerRef.current);
+    setVideoFile(null);
+    if (webPreview) URL.revokeObjectURL(webPreview);
+    setWebPreview(null);
+    setDescripcion(""); setHashtagsInput(""); setSubiendo(false); setProgreso(0);
   };
 
   const cerrar = () => { limpiar(); onClose(); };
-
-  const elegirReceta = (nombre: string) => { setRecetaElegida(nombre); setStep("video"); };
+  const elegirReceta = (nombre: string) => { setRecetaElegida(nombre); setStep("camara"); };
 
   const guardarNuevaReceta = async () => {
     const nombre = nuevaNombre.trim();
     if (!nombre) return;
     setGuardandoReceta(true);
-    await crearReceta({
-      nombre,
-      descripcion: nuevaDesc.trim(),
-      ingredientes: [],
-      calorias_total: parseFloat(nuevaKcal) || 0,
-      proteinas_total: parseFloat(nuevaProt) || 0,
-      grasas_total: parseFloat(nuevaGrasas) || 0,
-      carbohidratos_total: parseFloat(nuevaCarbos) || 0,
-    });
+    await crearReceta({ nombre, descripcion: nuevaDesc.trim(), ingredientes: [],
+      calorias_total: parseFloat(nuevaKcal) || 0, proteinas_total: parseFloat(nuevaProt) || 0,
+      grasas_total: parseFloat(nuevaGrasas) || 0, carbohidratos_total: parseFloat(nuevaCarbos) || 0 });
     setGuardandoReceta(false);
     elegirReceta(nombre);
   };
 
-  const seleccionarVideo = () => {
-    if (Platform.OS !== "web") { Alert.alert("Próximamente", "Subida desde app nativa disponible pronto."); return; }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "video/mp4,video/webm,video/quicktime,video/*";
-    input.onchange = (e: any) => {
-      const file = e.target?.files?.[0];
-      if (!file) return;
-      if (file.size > 500 * 1024 * 1024) { Alert.alert("Demasiado grande", "Máximo 500 MB."); return; }
-      // Liberar URL anterior si existe
-      if (preview) URL.revokeObjectURL(preview);
-      setVideoFile(file);
-      setPreview(URL.createObjectURL(file));
-    };
-    input.click();
+  // ── Acciones cámara ───────────────────────────────────────────────────────
+  const startRecording = async () => {
+    if (!cameraRef.current || recording) return;
+    setDuration(0); setRecording(true);
+    durTimerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+    try {
+      const video = await (cameraRef.current as any).recordAsync({ maxDuration: 120 });
+      // Limpiamos el estado ANTES de cambiar step para evitar flips visuales
+      if (durTimerRef.current) clearInterval(durTimerRef.current);
+      setRecording(false);
+      if (video?.uri) {
+        const ext = (video.uri.split("/").pop()?.split(".").pop() ?? "mp4").split("?")[0].toLowerCase();
+        setVideoFile({ uri: video.uri, type: `video/${ext}`, name: `reel.${ext}`, isNative: true });
+        setStep("detalles"); // Avance automático, sin pantalla intermedia
+      }
+    } catch {
+      if (durTimerRef.current) clearInterval(durTimerRef.current);
+      setRecording(false);
+    }
   };
 
-  const quitarVideo = () => {
-    if (preview) URL.revokeObjectURL(preview);
-    setVideoFile(null); setPreview(null);
+  const stopRecording = () => {
+    (cameraRef.current as any)?.stopRecording?.();
+    if (durTimerRef.current) clearInterval(durTimerRef.current);
   };
+
+  const pickGallery = async () => {
+    if (Platform.OS === "web") {
+      const input = document.createElement("input");
+      input.type = "file"; input.accept = "video/*";
+      input.onchange = (e: any) => {
+        const file = e.target?.files?.[0];
+        if (!file) return;
+        if (file.size > 500 * 1024 * 1024) { Alert.alert("Demasiado grande", "Máx. 500 MB."); return; }
+        if (webPreview) URL.revokeObjectURL(webPreview);
+        setVideoFile(file); setWebPreview(URL.createObjectURL(file));
+        setStep("detalles");
+      };
+      input.click();
+      return;
+    }
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") { Alert.alert("Sin permiso", "Necesitamos acceso a tu galería."); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: "videos", allowsEditing: false, quality: 1 });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    const ext = (asset.fileName ?? "video.mp4").split(".").pop() ?? "mp4";
+    setVideoFile({ uri: asset.uri, type: asset.mimeType ?? `video/${ext}`, name: asset.fileName ?? `video.${ext}`, isNative: true });
+    setStep("detalles");
+  };
+
+  const fmtDur = (s: number) =>
+    `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
+  const curFilter = FILTERS.find(f => f.name === selectedFilter) ?? FILTERS[0];
 
   const subir = async () => {
-    const titulo = recetaElegida.trim();
-    if (!titulo) { Alert.alert("", "Selecciona o escribe una receta."); return; }
-    if (!videoFile) { Alert.alert("", "Selecciona un vídeo primero."); return; }
-    if (!userId) { Alert.alert("Error", "Debes iniciar sesión."); return; }
+    if (!videoFile) { Alert.alert("Sin vídeo", "Graba o selecciona un vídeo primero."); return; }
+    if (!recetaElegida.trim()) { Alert.alert("Sin receta", "Vuelve al paso 1 y elige una receta."); return; }
+    if (!userId) { Alert.alert("Sesión caducada", "Cierra y vuelve a abrir la app."); return; }
     setSubiendo(true); setProgreso(5);
+    try {
+      const mimeType: string = videoFile.type ?? "video/mp4";
+      // Limpiar extensión (las URIs nativas pueden tener parámetros)
+      const rawName = videoFile.isNative ? (videoFile.uri.split("/").pop() ?? "reel.mp4") : (videoFile.name ?? "reel.mp4");
+      const ext = (rawName.split(".").pop() ?? "mp4").split("?")[0].toLowerCase();
+      const path = `${userId}/${Date.now()}.${ext}`;
 
-    const ext = (videoFile.name ?? "video.mp4").split(".").pop();
-    const path = `${userId}/${Date.now()}.${ext}`;
+      let uploadData: any = videoFile;
+      if (videoFile.isNative) {
+        setProgreso(15);
+        const r = await fetch(videoFile.uri);
+        uploadData = await r.blob();
+      }
+      setProgreso(30);
 
-    const { error: upErr } = await supabase.storage
-      .from("videos")
-      .upload(path, videoFile, { contentType: videoFile.type, upsert: false });
+      const { error: upErr } = await supabase.storage
+        .from("videos")
+        .upload(path, uploadData, { contentType: mimeType, upsert: false });
 
-    if (upErr) { setSubiendo(false); Alert.alert("Error al subir", upErr.message); return; }
-    setProgreso(78);
+      if (upErr) {
+        setSubiendo(false);
+        const isNoBucket = upErr.message?.includes("not found") || upErr.message?.includes("Bucket") || (upErr as any).statusCode === 404;
+        const isAuth = upErr.message?.includes("security") || upErr.message?.includes("permission") || (upErr as any).statusCode === 403;
+        let errMsg = upErr.message;
+        if (isNoBucket) {
+          errMsg = 'El bucket "videos" no existe en Supabase.\n\n👉 Pasos:\n1. supabase.com → tu proyecto\n2. Storage → New bucket\n3. Nombre exacto: videos\n4. Marca "Public bucket"\n5. Save\n\nLuego vuelve a intentarlo.';
+        } else if (isAuth) {
+          errMsg = 'El bucket existe pero no tiene permisos.\n\n👉 Storage → Policies → añade INSERT y SELECT para "anon".';
+        }
+        Alert.alert("No se pudo subir el vídeo", errMsg);
+        return;
+      }
+      setProgreso(80);
 
-    const { data: { publicUrl } } = supabase.storage.from("videos").getPublicUrl(path);
+      const { data: { publicUrl } } = supabase.storage.from("videos").getPublicUrl(path);
+      const hashtags = (hashtagsInput.match(/#[\w\u00C0-\u024F\u0400-\u04FF]+/g) ?? [])
+        .map(h => h.toLowerCase().slice(1));
 
-    const { error: dbErr } = await supabase.from("videos_recetas").insert([{
-      autor: nombreUsuario || "Anónimo",
-      autor_id: userId,
-      titulo,
-      descripcion: descripcion.trim(),
-      video_url: publicUrl,
-      likes: 0,
-    }]);
+      const base = {
+        autor: nombreUsuario || "Anónimo", autor_id: userId,
+        titulo: recetaElegida.trim(), descripcion: descripcion.trim(),
+        video_url: publicUrl, likes: 0,
+      };
 
-    setSubiendo(false);
-    if (dbErr) { Alert.alert("Error", dbErr.message); return; }
-    setProgreso(100);
-    Alert.alert("✓ Publicado", `Reel de «${titulo}» publicado 🎉`);
-    limpiar(); onSubido(); onClose();
+      // Intentar con columnas nuevas; si el schema no las tiene, reintentar sin ellas
+      let dbErr: any;
+      ({ error: dbErr } = await supabase.from("videos_recetas").insert([
+        { ...base, views: 0, hashtags, filtro: selectedFilter !== "Normal" ? selectedFilter : null },
+      ]));
+      if (dbErr?.code === "42703" || dbErr?.message?.includes("column")) {
+        ({ error: dbErr } = await supabase.from("videos_recetas").insert([{ ...base, views: 0, hashtags }]));
+      }
+      if (dbErr?.code === "42703" || dbErr?.message?.includes("column")) {
+        ({ error: dbErr } = await supabase.from("videos_recetas").insert([base]));
+      }
+
+      setSubiendo(false);
+      if (dbErr) {
+        Alert.alert("Error en base de datos",
+          `${dbErr.message}\nCódigo: ${dbErr.code}\n\n💡 Ejecuta el SQL de migraciones en Supabase SQL Editor (ALTER TABLE videos_recetas ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0; etc.)`
+        );
+        return;
+      }
+      setProgreso(100);
+      Alert.alert("✓ Publicado", `Reel de «${recetaElegida}» publicado 🎉`);
+      limpiar(); onSubido(); onClose();
+    } catch (e: any) {
+      setSubiendo(false);
+      Alert.alert("Error inesperado", e?.message ?? "Inténtalo de nuevo.");
+    }
   };
 
   const m = makeSubirStyles(colors);
-  const tituloReceta = recetaElegida || "";
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={cerrar}>
-      <SafeAreaView style={m.safe}>
-        {/* Cabecera */}
-        <View style={m.header}>
-          <TouchableOpacity onPress={
-            modoCrear ? () => setModoCrear(false)
-            : step === "video" && !recetaPrevia ? () => setStep("receta")
-            : cerrar
-          }>
-            <Text style={m.back}>
-              {modoCrear ? "← Recetas" : step === "video" && !recetaPrevia ? "← Receta" : "✕ Cerrar"}
-            </Text>
-          </TouchableOpacity>
-          <Text style={m.title}>
-            {step === "receta" ? "📋 Elige la receta" : `🎬 Vídeo de «${tituloReceta}»`}
-          </Text>
-          <View style={{ width: 60 }} />
-        </View>
 
-        {/* Indicador de pasos */}
-        <View style={m.steps}>
-          <View style={[m.step, m.stepDone]}><Text style={m.stepTxt}>1 Receta</Text></View>
-          <View style={m.stepLine} />
-          <View style={[m.step, step === "video" && m.stepDone]}><Text style={m.stepTxt}>2 Vídeo</Text></View>
-        </View>
-
-        {/* ── PASO 1: elegir receta ── */}
-        {step === "receta" && (
+      {/* ══ PASO 1: RECETA ══════════════════════════════════════════════════ */}
+      {step === "receta" && (
+        <SafeAreaView style={m.safe}>
+          <View style={m.header}>
+            <TouchableOpacity onPress={modoCrear ? () => setModoCrear(false) : cerrar}>
+              <Text style={m.back}>{modoCrear ? "← Recetas" : "✕ Cerrar"}</Text>
+            </TouchableOpacity>
+            <Text style={m.title}>📋 Elige la receta</Text>
+            <View style={{ width: 60 }} />
+          </View>
+          <View style={m.steps}>
+            {(["Receta","Vídeo","Detalles"] as const).map((lbl, i) => (
+              <React.Fragment key={lbl}>
+                {i > 0 && <View style={m.stepLine} />}
+                <View style={[m.step, i === 0 && m.stepDone]}><Text style={m.stepTxt}>{i+1} {lbl}</Text></View>
+              </React.Fragment>
+            ))}
+          </View>
           <ScrollView style={m.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             {!modoCrear ? (
               <>
@@ -355,33 +490,18 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
             ) : (
               <View style={m.nuevaBox}>
                 <Text style={m.nuevaLabel}>Nombre de la receta *</Text>
-                <TextInput
-                  style={m.input} value={nuevaNombre} onChangeText={setNuevaNombre}
-                  placeholder="Ej: Pasta carbonara casera" placeholderTextColor={colors.textMuted}
-                  autoFocus maxLength={80}
-                />
+                <TextInput style={m.input} value={nuevaNombre} onChangeText={setNuevaNombre}
+                  placeholder="Ej: Pasta carbonara casera" placeholderTextColor={colors.textMuted} autoFocus maxLength={80} />
                 <Text style={[m.nuevaLabel, { marginTop: 12 }]}>Descripción (opcional)</Text>
-                <TextInput
-                  style={[m.input, { height: 70 }]} value={nuevaDesc} onChangeText={setNuevaDesc}
-                  placeholder="Pasos, ingredientes, consejos..." placeholderTextColor={colors.textMuted}
-                  multiline numberOfLines={3} maxLength={200}
-                />
+                <TextInput style={[m.input, { height: 70 }]} value={nuevaDesc} onChangeText={setNuevaDesc}
+                  placeholder="Pasos, ingredientes, consejos..." placeholderTextColor={colors.textMuted} multiline numberOfLines={3} maxLength={200} />
                 <Text style={[m.nuevaLabel, { marginTop: 12 }]}>Macros (opcional)</Text>
                 <View style={{ flexDirection: "row", gap: 8, marginBottom: 4 }}>
-                  {[
-                    { label: "kcal", val: nuevaKcal, set: setNuevaKcal, color: "#4ADE80" },
-                    { label: "Prot g", val: nuevaProt, set: setNuevaProt, color: "#60A5FA" },
-                    { label: "Carbos g", val: nuevaCarbos, set: setNuevaCarbos, color: "#FBBF24" },
-                    { label: "Grasas g", val: nuevaGrasas, set: setNuevaGrasas, color: "#F87171" },
-                  ].map(f => (
+                  {[{label:"kcal",val:nuevaKcal,set:setNuevaKcal,color:"#4ADE80"},{label:"Prot g",val:nuevaProt,set:setNuevaProt,color:"#60A5FA"},{label:"Carbos g",val:nuevaCarbos,set:setNuevaCarbos,color:"#FBBF24"},{label:"Grasas g",val:nuevaGrasas,set:setNuevaGrasas,color:"#F87171"}].map(f => (
                     <View key={f.label} style={{ flex: 1 }}>
                       <Text style={{ color: f.color, fontSize: 10, fontWeight: "700", marginBottom: 3 }}>{f.label}</Text>
-                      <TextInput
-                        style={[m.input, { paddingVertical: 8, textAlign: "center" }]}
-                        value={f.val} onChangeText={f.set}
-                        placeholder="0" placeholderTextColor={colors.textMuted}
-                        keyboardType="numeric" maxLength={6}
-                      />
+                      <TextInput style={[m.input, { paddingVertical: 8, textAlign: "center" }]} value={f.val} onChangeText={f.set}
+                        placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" maxLength={6} />
                     </View>
                   ))}
                 </View>
@@ -389,55 +509,245 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
                   <TouchableOpacity style={m.cancelBtn} onPress={() => setModoCrear(false)}>
                     <Text style={m.cancelTxt}>Cancelar</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[m.nextBtn, (!nuevaNombre.trim() || guardandoReceta) && m.btnDis]}
-                    onPress={guardarNuevaReceta}
-                    disabled={!nuevaNombre.trim() || guardandoReceta}
-                  >
-                    {guardandoReceta
-                      ? <ActivityIndicator color="#fff" size="small" />
-                      : <Text style={m.nextBtnTxt}>Guardar y continuar →</Text>
-                    }
+                  <TouchableOpacity style={[m.nextBtn, (!nuevaNombre.trim() || guardandoReceta) && m.btnDis]}
+                    onPress={guardarNuevaReceta} disabled={!nuevaNombre.trim() || guardandoReceta}>
+                    {guardandoReceta ? <ActivityIndicator color="#fff" size="small" /> : <Text style={m.nextBtnTxt}>Guardar y continuar →</Text>}
                   </TouchableOpacity>
                 </View>
               </View>
             )}
             <View style={{ height: 60 }} />
           </ScrollView>
-        )}
+        </SafeAreaView>
+      )}
 
-        {/* ── PASO 2: vídeo ── */}
-        {step === "video" && (
-          <ScrollView style={m.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            {/* Preview con botón cambiar */}
-            {preview ? (
-              <View style={m.previewWrap}>
-                {Platform.OS === "web"
-                  ? (React.createElement as any)("video", {
-                      src: preview,
-                      style: { width: "100%", height: 300, objectFit: "contain", borderRadius: 14, backgroundColor: "#000" },
-                      muted: true, loop: true, autoPlay: true, playsInline: true,
-                    })
-                  : null
-                }
-                <TouchableOpacity style={m.changeBtn} onPress={quitarVideo}>
-                  <Text style={m.changeBtnTxt}>✕ Quitar y elegir otro vídeo</Text>
+      {/* ══ PASO 2: CÁMARA ══════════════════════════════════════════════════ */}
+      {step === "camara" && (
+        <View style={{ flex: 1, backgroundColor: "#000" }}>
+          {Platform.OS === "web" ? (
+            /* Web: selector de archivo */
+            <SafeAreaView style={[m.safe, { backgroundColor: "#0F172A" }]}>
+              <View style={[m.header, { backgroundColor: "#0F172A" }]}>
+                <TouchableOpacity onPress={() => setStep("receta")}>
+                  <Text style={[m.back, { color: "#58A6FF" }]}>← Receta</Text>
+                </TouchableOpacity>
+                <Text style={[m.title, { color: "#fff" }]}>🎬 Selecciona vídeo</Text>
+                <View style={{ width: 60 }} />
+              </View>
+              <View style={m.steps}>
+                {(["Receta","Vídeo","Detalles"] as const).map((lbl, i) => (
+                  <React.Fragment key={lbl}>
+                    {i > 0 && <View style={m.stepLine} />}
+                    <View style={[m.step, i <= 1 && m.stepDone]}><Text style={m.stepTxt}>{i+1} {lbl}</Text></View>
+                  </React.Fragment>
+                ))}
+              </View>
+              <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 32 }}>
+                <TouchableOpacity style={m.picker} onPress={pickGallery}>
+                  <Text style={m.pickerIcon}>📁</Text>
+                  <Text style={m.pickerTxt}>Seleccionar vídeo</Text>
+                  <Text style={m.pickerHint}>MP4 · WebM · MOV · hasta 500 MB</Text>
                 </TouchableOpacity>
               </View>
-            ) : (
-              <TouchableOpacity style={m.picker} onPress={seleccionarVideo}>
-                <Text style={m.pickerIcon}>📹</Text>
-                <Text style={m.pickerTxt}>Toca para seleccionar vídeo</Text>
-                <Text style={m.pickerHint}>MP4 · WebM · MOV · hasta 500 MB</Text>
+            </SafeAreaView>
+          ) : (!camPerm?.granted || !micPerm?.granted) ? (
+            /* Sin permisos */
+            <SafeAreaView style={[m.safe, { backgroundColor: "#0F172A", justifyContent: "center", alignItems: "center", gap: 16, padding: 32 }]}>
+              <Text style={{ fontSize: 52 }}>📷</Text>
+              <Text style={{ color: "#fff", fontSize: 16, fontWeight: "700", textAlign: "center" }}>
+                Necesitamos acceso a la cámara y al micrófono
+              </Text>
+              <TouchableOpacity style={{ backgroundColor: "#1F6FEB", borderRadius: 12, paddingHorizontal: 28, paddingVertical: 12 }}
+                onPress={() => { requestCamPerm(); requestMicPerm(); }}>
+                <Text style={{ color: "#fff", fontWeight: "700" }}>Conceder permisos</Text>
               </TouchableOpacity>
-            )}
+              <TouchableOpacity onPress={() => setStep("receta")}>
+                <Text style={{ color: "#94A3B8", marginTop: 8 }}>← Volver</Text>
+              </TouchableOpacity>
+            </SafeAreaView>
+          ) : (
+            /* Cámara activa — pantalla completa */
+            <CameraView
+              ref={cameraRef}
+              style={StyleSheet.absoluteFill}
+              facing={facing}
+              mode="video"
+              videoQuality="2160p"
+              autofocus="on"
+              zoom={0}
+              flash="off"
+            >
+              {/* Overlay filtro */}
+              {curFilter.name !== "Normal" && (
+                <View pointerEvents="none" style={{ ...StyleSheet.absoluteFillObject, backgroundColor: curFilter.overlay, opacity: curFilter.opacity }} />
+              )}
 
-            <TextInput
-              style={[m.input, { height: 90, marginTop: 14 }]}
+              {/* Nombre filtro activo */}
+              {curFilter.name !== "Normal" && !recording && (
+                <View style={{ position: "absolute", top: 100, alignSelf: "center", backgroundColor: "#0008", borderRadius: 16, paddingHorizontal: 16, paddingVertical: 5 }}>
+                  <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14 }}>{curFilter.icon} {curFilter.name}</Text>
+                </View>
+              )}
+
+              {/* Nombre receta arriba */}
+              {!recording && (
+                <View style={{ position: "absolute", top: 52, alignSelf: "center", backgroundColor: "#0007", borderRadius: 14, paddingHorizontal: 16, paddingVertical: 6, maxWidth: SW - 120 }}>
+                  <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }} numberOfLines={1}>🍽 {recetaElegida}</Text>
+                </View>
+              )}
+
+              {/* Botón X (cerrar) */}
+              <TouchableOpacity
+                style={{ position: "absolute", top: 52, left: 16, width: 40, height: 40, borderRadius: 20, backgroundColor: "#0008", justifyContent: "center", alignItems: "center" }}
+                onPress={() => setStep("receta")} disabled={recording}>
+                <Text style={{ color: "#fff", fontSize: 20, fontWeight: "300" }}>✕</Text>
+              </TouchableOpacity>
+
+              {/* Flip cámara */}
+              <TouchableOpacity
+                style={{ position: "absolute", top: 52, right: 16, width: 40, height: 40, borderRadius: 20, backgroundColor: "#0008", justifyContent: "center", alignItems: "center" }}
+                onPress={() => !recording && setFacing(f => f === "back" ? "front" : "back")}>
+                <Text style={{ fontSize: 20 }}>🔄</Text>
+              </TouchableOpacity>
+
+              {/* Timer grabación */}
+              {recording && (
+                <View style={{ position: "absolute", top: 60, alignSelf: "center", backgroundColor: "#EF4444EE", borderRadius: 20, paddingHorizontal: 16, paddingVertical: 6, flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#fff" }} />
+                  <Text style={{ color: "#fff", fontWeight: "800", fontSize: 16 }}>{fmtDur(duration)}</Text>
+                </View>
+              )}
+
+              {/* Tira de filtros — visible al deslizar el botón de grabar */}
+              {filterStripVisible && !recording && (
+                <View style={{ position: "absolute", bottom: 160, left: 0, right: 0 }}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}>
+                    {FILTERS.map(f => (
+                      <TouchableOpacity key={f.name}
+                        style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 22, marginRight: 4,
+                          backgroundColor: selectedFilter === f.name ? "#1F6FEB" : "rgba(0,0,0,0.72)",
+                          borderWidth: 2, borderColor: selectedFilter === f.name ? "#60A5FA" : "rgba(255,255,255,0.25)" }}
+                        onPress={() => { setSelectedFilter(f.name); setFilterStripVisible(false); }}>
+                        <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>{f.icon} {f.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* Controles inferiores */}
+              <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, paddingBottom: 50,
+                flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingHorizontal: 32 }}>
+
+                {/* + Galería (izquierda abajo) */}
+                <TouchableOpacity
+                  style={{ width: 60, height: 60, borderRadius: 16, backgroundColor: "#0008", borderWidth: 2, borderColor: "#ffffff55", justifyContent: "center", alignItems: "center" }}
+                  onPress={pickGallery} disabled={recording}>
+                  <Text style={{ fontSize: 30, color: "#fff" }}>＋</Text>
+                </TouchableOpacity>
+
+                {/* Botón grabar — desliza → para filtros */}
+                <View style={{ alignItems: "center" }}>
+                  {!recording && !filterStripVisible && (
+                    <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, marginBottom: 6 }}>
+                      ← Desliza → para filtros
+                    </Text>
+                  )}
+                  <Animated.View
+                    {...recBtnPR.panHandlers}
+                    style={{ transform: [{ translateX: recBtnAnim }] }}>
+                    <TouchableOpacity
+                      style={{ width: 82, height: 82, borderRadius: 41, borderWidth: 5,
+                        borderColor: recording ? "#EF4444" : "#ffffffDD",
+                        backgroundColor: "transparent", justifyContent: "center", alignItems: "center" }}
+                      onPress={recording ? stopRecording : startRecording}>
+                      <View style={{
+                        width: recording ? 28 : 68, height: recording ? 28 : 68,
+                        borderRadius: recording ? 6 : 34,
+                        backgroundColor: recording ? "#fff" : "#EF4444",
+                      }} />
+                    </TouchableOpacity>
+                  </Animated.View>
+                </View>
+
+                {/* Espacio derecho */}
+                <View style={{ width: 60 }} />
+              </View>
+            </CameraView>
+          )}
+        </View>
+      )}
+
+      {/* ══ PASO 3: DETALLES ════════════════════════════════════════════════ */}
+      {step === "detalles" && (
+        <SafeAreaView style={m.safe}>
+          <View style={m.header}>
+            <TouchableOpacity onPress={() => { setVideoFile(null); setWebPreview(null); setStep("camara"); }}>
+              <Text style={m.back}>← Vídeo</Text>
+            </TouchableOpacity>
+            <Text style={m.title}>✏️ Detalles</Text>
+            <View style={{ width: 60 }} />
+          </View>
+          <View style={m.steps}>
+            {(["Receta","Vídeo","Detalles"] as const).map((lbl, i) => (
+              <React.Fragment key={lbl}>
+                {i > 0 && <View style={m.stepLine} />}
+                <View style={[m.step, m.stepDone]}><Text style={m.stepTxt}>{i+1} {lbl}</Text></View>
+              </React.Fragment>
+            ))}
+          </View>
+          <ScrollView style={m.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            {/* Mini-preview */}
+            <View style={{ backgroundColor: "#111", borderRadius: 14, height: 140,
+              justifyContent: "center", alignItems: "center", marginBottom: 16, gap: 6 }}>
+              {webPreview
+                ? (React.createElement as any)("video", { src: webPreview,
+                    style: { width: "100%", height: 140, objectFit: "contain", borderRadius: 14, backgroundColor: "#000",
+                      ...(curFilter.webCss ? { filter: curFilter.webCss } : {}) },
+                    muted: true, loop: true, autoPlay: true, playsInline: true })
+                : <>
+                    <Text style={{ fontSize: 36 }}>🎬</Text>
+                    <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>
+                      {videoFile?.name ?? "Vídeo listo"}
+                    </Text>
+                  </>
+              }
+            </View>
+
+            {/* Tira de filtros — también accesible desde detalles */}
+            <Text style={m.nuevaLabel}>Filtro visual</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}
+              style={{ marginBottom: 16 }}
+              contentContainerStyle={{ gap: 8, paddingHorizontal: 2 }}>
+              {FILTERS.map(f => (
+                <TouchableOpacity key={f.name}
+                  style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+                    backgroundColor: selectedFilter === f.name ? "#1F6FEB" : colors.card,
+                    borderWidth: 1.5, borderColor: selectedFilter === f.name ? "#60A5FA" : colors.cardBorder }}
+                  onPress={() => setSelectedFilter(f.name)}>
+                  <Text style={{ color: selectedFilter === f.name ? "#fff" : colors.text, fontSize: 12, fontWeight: "700" }}>
+                    {f.icon} {f.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <Text style={m.nuevaLabel}>
+              Descripción <Text style={{ color: colors.textMuted, fontWeight: "400" }}>(opcional)</Text>
+            </Text>
+            <TextInput style={[m.input, { height: 90, marginBottom: 14 }]}
               value={descripcion} onChangeText={setDescripcion}
-              placeholder="Descripción opcional: ingredientes, pasos, consejos..."
-              placeholderTextColor={colors.textMuted} multiline numberOfLines={4} maxLength={300}
-            />
+              placeholder="Ingredientes, pasos, consejos..."
+              placeholderTextColor={colors.textMuted} multiline numberOfLines={4} maxLength={300} />
+
+            <Text style={m.nuevaLabel}>
+              Hashtags <Text style={{ color: colors.textMuted, fontWeight: "400" }}>(opcional)</Text>
+            </Text>
+            <TextInput style={[m.input, { marginBottom: 20 }]}
+              value={hashtagsInput} onChangeText={setHashtagsInput}
+              placeholder="#desayuno #proteina #fácil"
+              placeholderTextColor={colors.textMuted} maxLength={120}
+              autoCapitalize="none" autoCorrect={false} />
 
             {subiendo && (
               <View style={m.progWrap}>
@@ -446,19 +756,13 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
               </View>
             )}
 
-            <TouchableOpacity
-              style={[m.publishBtn, (!videoFile || subiendo) && m.btnDis]}
-              onPress={subir} disabled={!videoFile || subiendo}
-            >
-              {subiendo
-                ? <ActivityIndicator color="#fff" size="small" />
-                : <Text style={m.publishTxt}>🎬 Publicar Reel</Text>
-              }
+            <TouchableOpacity style={[m.publishBtn, subiendo && m.btnDis]} onPress={subir} disabled={subiendo}>
+              {subiendo ? <ActivityIndicator color="#fff" size="small" /> : <Text style={m.publishTxt}>🎬 Publicar Reel</Text>}
             </TouchableOpacity>
             <View style={{ height: 60 }} />
           </ScrollView>
-        )}
-      </SafeAreaView>
+        </SafeAreaView>
+      )}
     </Modal>
   );
 }
@@ -466,7 +770,6 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
 // ─── Pantalla principal ───────────────────────────────────────────────────────
 export default function ReelsScreen() {
   const router = useRouter();
-  const { colors, theme } = useApp();
   const params = useLocalSearchParams<{ recetaNombre?: string }>();
   const [tab, setTab] = useState<"parati" | "siguiendo">("parati");
   const [reels, setReels] = useState<Reel[]>([]);
@@ -484,6 +787,8 @@ export default function ReelsScreen() {
   const [modalReceta, setModalReceta] = useState<Reel | null>(null);
   const [recetaDetalle, setRecetaDetalle] = useState<any>(null);
   const [cargandoReceta, setCargandoReceta] = useState(false);
+  const [likedHashtags, setLikedHashtags] = useState<Set<string>>(new Set());
+  const [hashtagActivo, setHashtagActivo] = useState<string | null>(null);
 
   // Si viene desde recetas.tsx con una receta pre-seleccionada
   useEffect(() => {
@@ -493,51 +798,98 @@ export default function ReelsScreen() {
     }
   }, [params.recetaNombre]);
 
+  // View tracking: increment after 2s watching the same reel
+  useEffect(() => {
+    const currentList = tab === "parati" ? reels : siguiendoReels;
+    const reel = currentList[activeIdx];
+    if (!reel) return;
+    const timer = setTimeout(() => {
+      supabase.rpc("increment_views", { row_id: reel.id });
+      const upd = (list: Reel[]) => list.map(r => r.id === reel.id ? { ...r, views: (r.views ?? 0) + 1 } : r);
+      setReels(upd); setSiguiendoReels(upd);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [activeIdx, tab]);
+
   useFocusEffect(useCallback(() => {
-    cargarDatos();
+    let mounted = true;
+    cargarDatos(mounted);
+    return () => { mounted = false; };
   }, [tab]));
 
-  const cargarDatos = async () => {
-    setCargando(true);
+  const cargarDatos = async (mounted = true) => {
+    if (mounted) setCargando(true);
     try {
       const { data: ses } = await supabase.auth.getSession();
       const uid = ses.session?.user?.id ?? "";
+      if (!mounted) return;
       if (uid) setUserId(uid);
 
       if (uid) {
         const { data: p } = await supabase.from("perfiles").select("nombre").eq("id", uid).single();
-        if (p?.nombre) setNombreUsuario(p.nombre);
         const { data: segs } = await supabase.from("seguidos").select("followed_id").eq("follower_id", uid);
+        if (!mounted) return;
+        if (p?.nombre) setNombreUsuario(p.nombre);
         setSeguidosIds(new Set((segs ?? []).map((s: any) => s.followed_id)));
       }
 
-      const liked = await AsyncStorage.getItem(LIKED_KEY);
+      const [liked, likedHTRaw] = await Promise.all([
+        AsyncStorage.getItem(LIKED_KEY),
+        AsyncStorage.getItem(LIKED_HASHTAGS_KEY),
+      ]);
+      if (!mounted) return;
       setLikedIds(new Set(liked ? JSON.parse(liked) : []));
+      const likedHTSet = new Set<string>(likedHTRaw ? JSON.parse(likedHTRaw) : []);
+      setLikedHashtags(likedHTSet);
 
       if (tab === "parati") {
-        const { data } = await supabase.from("videos_recetas").select("*").order("creado_en", { ascending: false });
-        setReels((data ?? []).filter((r: any) => r.video_url));
+        const { data } = await supabase.from("videos_recetas").select("*").order("creado_en", { ascending: false }).limit(50);
+        if (!mounted) return;
+        const raw = (data ?? []).filter((r: any) => r.video_url) as Reel[];
+        setReels([...raw].sort((a, b) => scoreReel(b, likedHTSet) - scoreReel(a, likedHTSet)));
       } else {
         const { data: segs } = await supabase.from("seguidos").select("followed_id").eq("follower_id", uid);
         const ids = (segs ?? []).map((s: any) => s.followed_id);
+        if (!mounted) return;
         if (ids.length > 0) {
-          const { data } = await supabase.from("videos_recetas").select("*").in("autor_id", ids).order("creado_en", { ascending: false });
+          const { data } = await supabase.from("videos_recetas").select("*").in("autor_id", ids).order("creado_en", { ascending: false }).limit(50);
+          if (!mounted) return;
           setSiguiendoReels((data ?? []).filter((r: any) => r.video_url));
         } else setSiguiendoReels([]);
       }
-    } finally { setCargando(false); }
+    } catch {
+      // silently ignore network/auth errors on dismount
+    } finally {
+      if (mounted) setCargando(false);
+    }
   };
 
   const handleLike = async (reel: Reel) => {
     const already = likedIds.has(reel.id);
-    const next = new Set(likedIds);
     const delta = already ? -1 : 1;
+    // Optimistic UI update
+    const next = new Set(likedIds);
     if (already) next.delete(reel.id); else next.add(reel.id);
     setLikedIds(next);
     await AsyncStorage.setItem(LIKED_KEY, JSON.stringify([...next]));
-    await supabase.from("videos_recetas").update({ likes: Math.max(0, reel.likes + delta) }).eq("id", reel.id);
+    // Personalization: remember hashtags of liked reels
+    if (!already && reel.hashtags?.length) {
+      const nextHT = new Set([...likedHashtags, ...reel.hashtags]);
+      setLikedHashtags(nextHT);
+      AsyncStorage.setItem(LIKED_HASHTAGS_KEY, JSON.stringify([...nextHT]));
+    }
     const upd = (list: Reel[]) => list.map(r => r.id === reel.id ? { ...r, likes: Math.max(0, r.likes + delta) } : r);
     setReels(upd); setSiguiendoReels(upd);
+    // Use RPC increment to avoid race conditions between concurrent users
+    const { error } = await supabase.rpc("increment_likes", { row_id: reel.id, delta });
+    if (error) {
+      // Rollback optimistic update on failure
+      const rollback = new Set(likedIds);
+      setLikedIds(rollback);
+      await AsyncStorage.setItem(LIKED_KEY, JSON.stringify([...rollback]));
+      const revert = (list: Reel[]) => list.map(r => r.id === reel.id ? { ...r, likes: Math.max(0, r.likes - delta) } : r);
+      setReels(revert); setSiguiendoReels(revert);
+    }
   };
 
   const handleFollow = async (reel: Reel) => {
@@ -548,7 +900,10 @@ export default function ReelsScreen() {
       await supabase.from("seguidos").delete().eq("follower_id", userId).eq("followed_id", reel.autor_id);
       next.delete(reel.autor_id);
     } else {
-      await supabase.from("seguidos").insert([{ follower_id: userId, follower_nombre: nombreUsuario, followed_id: reel.autor_id, followed_nombre: reel.autor }]);
+      await supabase.from("seguidos").upsert(
+        [{ follower_id: userId, follower_nombre: nombreUsuario, followed_id: reel.autor_id, followed_nombre: reel.autor }],
+        { onConflict: "follower_id,followed_id", ignoreDuplicates: true }
+      );
       next.add(reel.autor_id);
     }
     setSeguidosIds(next);
@@ -581,6 +936,17 @@ export default function ReelsScreen() {
 
   const lista = tab === "parati" ? reels : siguiendoReels;
 
+  const listaFiltrada = useMemo(() => {
+    if (!hashtagActivo) return lista;
+    return lista.filter(r => r.hashtags?.includes(hashtagActivo));
+  }, [lista, hashtagActivo]);
+
+  const todosHashtags = useMemo(() => {
+    const counts = new Map<string, number>();
+    lista.forEach(r => r.hashtags?.forEach(h => counts.set(h, (counts.get(h) ?? 0) + 1)));
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]).slice(0, 15);
+  }, [lista]);
+
   return (
     <View style={{ flex: 1, backgroundColor: "#000" }}>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
@@ -590,7 +956,7 @@ export default function ReelsScreen() {
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
           <ActivityIndicator color="#fff" size="large" />
         </View>
-      ) : lista.length === 0 ? (
+      ) : listaFiltrada.length === 0 ? (
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 40 }}>
           <Text style={{ fontSize: 64 }}>{tab === "siguiendo" ? "👥" : "🎬"}</Text>
           <Text style={{ color: "#fff", fontSize: 22, fontWeight: "800", marginTop: 20, textAlign: "center" }}>
@@ -622,7 +988,7 @@ export default function ReelsScreen() {
           }}
           scrollEventThrottle={100}
         >
-          {lista.map((reel, i) => (
+          {listaFiltrada.map((reel, i) => (
             <ReelItem
               key={reel.id}
               reel={reel}
@@ -648,10 +1014,10 @@ export default function ReelsScreen() {
             <Text style={h.back}>← Volver</Text>
           </TouchableOpacity>
           <View style={h.tabs}>
-            <TouchableOpacity onPress={() => { setTab("parati"); setActiveIdx(0); }}>
+            <TouchableOpacity onPress={() => { setTab("parati"); setActiveIdx(0); setHashtagActivo(null); }}>
               <Text style={[h.tab, tab === "parati" && h.tabActive]}>Para ti</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => { setTab("siguiendo"); setActiveIdx(0); }}>
+            <TouchableOpacity onPress={() => { setTab("siguiendo"); setActiveIdx(0); setHashtagActivo(null); }}>
               <Text style={[h.tab, tab === "siguiendo" && h.tabActive]}>
                 Siguiendo{seguidosIds.size > 0 ? ` (${seguidosIds.size})` : ""}
               </Text>
@@ -661,6 +1027,30 @@ export default function ReelsScreen() {
             <Text style={h.plus}>＋</Text>
           </TouchableOpacity>
         </View>
+        {todosHashtags.length > 0 && (
+          <ScrollView
+            horizontal showsHorizontalScrollIndicator={false}
+            style={{ paddingLeft: 12, marginBottom: 4 }}
+            contentContainerStyle={{ gap: 6, paddingRight: 16 }}
+            pointerEvents="auto"
+          >
+            <TouchableOpacity
+              style={[h.chip, !hashtagActivo && h.chipActive]}
+              onPress={() => { setHashtagActivo(null); setActiveIdx(0); }}
+            >
+              <Text style={[h.chipTxt, !hashtagActivo && h.chipActiveTxt]}>Todo</Text>
+            </TouchableOpacity>
+            {todosHashtags.map(tag => (
+              <TouchableOpacity
+                key={tag}
+                style={[h.chip, hashtagActivo === tag && h.chipActive]}
+                onPress={() => { setHashtagActivo(hashtagActivo === tag ? null : tag); setActiveIdx(0); }}
+              >
+                <Text style={[h.chipTxt, hashtagActivo === tag && h.chipActiveTxt]}>#{tag}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
       </SafeAreaView>
 
       {/* Modal subir */}
@@ -772,6 +1162,10 @@ const h = StyleSheet.create({
   tab: { color: "rgba(255,255,255,0.5)", fontSize: 16, fontWeight: "700", paddingBottom: 2, ...shadow },
   tabActive: { color: "#fff", borderBottomWidth: 2, borderBottomColor: "#fff" },
   plus: { color: "#fff", fontSize: 26, fontWeight: "300", ...shadow },
+  chip: { backgroundColor: "rgba(255,255,255,0.15)", borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5 },
+  chipActive: { backgroundColor: "#1F6FEB" },
+  chipTxt: { color: "rgba(255,255,255,0.65)", fontSize: 12, fontWeight: "600" },
+  chipActiveTxt: { color: "#fff" },
 });
 
 // ─── Estilos popup borrar ─────────────────────────────────────────────────────

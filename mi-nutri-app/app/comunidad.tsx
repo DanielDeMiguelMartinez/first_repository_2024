@@ -545,7 +545,8 @@ export default function ComunidadScreen() {
     const { data } = await supabase
       .from("publicaciones_recetas")
       .select("*")
-      .order(order, { ascending: false });
+      .order(order, { ascending: false })
+      .limit(50);
     const limpias = (data || [])
       .filter((item: any) => item && item.nombre_receta)
       .map((item: any) => ({

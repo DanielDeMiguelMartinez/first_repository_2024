@@ -147,18 +147,25 @@ export async function crearAlimentoPersonalizado(alimento: AlimentoPersonalizado
 }
 
 export async function obtenerRecetas(): Promise<Receta[]> {
+  const { data: ses } = await supabase.auth.getSession();
+  const uid = ses.session?.user?.id;
+  if (!uid) return [];
   const { data, error } = await supabase
     .from("recetas")
     .select("*")
-    .order("creado_en", { ascending: false });
+    .eq("user_id", uid)
+    .order("creado_en", { ascending: false })
+    .limit(100);
   if (error) return [];
   return data || [];
 }
 
 export async function crearReceta(receta: Receta): Promise<boolean> {
+  const { data: ses } = await supabase.auth.getSession();
+  const uid = ses.session?.user?.id;
   const { error } = await supabase
     .from("recetas")
-    .insert([receta]);
+    .insert([{ ...receta, user_id: uid }]);
   return !error;
 }
 

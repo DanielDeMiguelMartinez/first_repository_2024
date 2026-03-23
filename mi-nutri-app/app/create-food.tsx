@@ -272,7 +272,7 @@ export default function CreateFoodScreen() {
                   style={s.macroInput}
                   value={form[campo.key]}
                   onChangeText={(v) => set(campo.key, v)}
-                  keyboardType="numeric"
+                  keyboardType={campo.decimal ? "decimal-pad" : "numeric"}
                   placeholder="0"
                   placeholderTextColor={colors.textMuted}
                 />
@@ -292,7 +292,7 @@ export default function CreateFoodScreen() {
               onChangeText={setPesoEnvase}
               placeholder="Ej: 200"
               placeholderTextColor={colors.textMuted}
-              keyboardType="numeric"
+              keyboardType="decimal-pad"
             />
             <View style={s.pesoEnvaseUnit}>
               <Text style={s.pesoEnvaseUnitText}>g</Text>
