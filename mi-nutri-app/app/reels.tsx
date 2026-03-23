@@ -31,7 +31,7 @@ type Reel = {
   id: string; autor: string; autor_id: string;
   titulo: string; descripcion: string; video_url: string;
   likes: number; views: number; creado_en: string;
-  hashtags: string[]; filtro?: string;
+  hashtags: string[]; filtro?: string; camara_frontal?: boolean;
 };
 
 // ── Algoritmo de engagement ───────────────────────────────────────────────────
@@ -58,8 +58,9 @@ function timeAgo(d: string) {
 }
 
 // ─── Reproductor ──────────────────────────────────────────────────────────────
-function VideoPlayer({ url, active, muted, onToggleMute, filtro }: {
-  url: string; active: boolean; muted: boolean; onToggleMute: () => void; filtro?: string;
+function VideoPlayer({ url, active, muted, onToggleMute, filtro, camaraFrontal }: {
+  url: string; active: boolean; muted: boolean; onToggleMute: () => void;
+  filtro?: string; camaraFrontal?: boolean;
 }) {
   const filterCss = filtro ? (FILTERS.find(f => f.name === filtro)?.webCss ?? "") : "";
   const ref = useRef<any>(null);
@@ -70,7 +71,12 @@ function VideoPlayer({ url, active, muted, onToggleMute, filtro }: {
   useEffect(() => {
     if (Platform.OS !== "web" || !ref.current) return;
     if (active) {
-      ref.current.play?.().catch(() => {});
+      ref.current.muted = muted;
+      // Intentar con audio; si el navegador bloquea, fallback a silencio
+      ref.current.play?.().catch(() => {
+        ref.current.muted = true;
+        ref.current.play?.().catch(() => {});
+      });
     } else {
       ref.current.pause?.();
       ref.current.currentTime = 0;
@@ -81,6 +87,7 @@ function VideoPlayer({ url, active, muted, onToggleMute, filtro }: {
   useEffect(() => {
     if (Platform.OS !== "web" || !webFullscreen || !fsRef.current) return;
     if (ref.current) fsRef.current.currentTime = ref.current.currentTime ?? 0;
+    fsRef.current.muted = muted;
     fsRef.current.play?.().catch(() => {});
   }, [webFullscreen]);
 
@@ -104,11 +111,20 @@ function VideoPlayer({ url, active, muted, onToggleMute, filtro }: {
             display: "block",
             backgroundColor: "#000",
             ...(filterCss ? { filter: filterCss } : {}),
+            ...(camaraFrontal ? { transform: "scaleX(-1)" } : {}),
           },
-          muted: true,
+          muted: muted,
           loop: true,
-          autoPlay: active,
           playsInline: true,
+          // onCanPlay: arranca en cuanto hay datos suficientes sin esperar el efecto de React
+          onCanPlay: (e: any) => {
+            if (active) {
+              e.target.play?.().catch(() => {
+                e.target.muted = true;
+                e.target.play?.().catch(() => {});
+              });
+            }
+          },
         })}
         {/* Controles superpuestos */}
         <View style={vid.controls} pointerEvents="box-none">
@@ -180,7 +196,7 @@ function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, o
   return (
     <View style={{ width: SW, height: SH, backgroundColor: "#000" }}>
       <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowDesc(v => !v)}>
-        <VideoPlayer url={reel.video_url} active={active} muted={muted} onToggleMute={onToggleMute} filtro={reel.filtro} />
+        <VideoPlayer url={reel.video_url} active={active} muted={muted} onToggleMute={onToggleMute} filtro={reel.filtro} camaraFrontal={reel.camara_frontal} />
       </TouchableOpacity>
 
       {/* Sombra inferior */}
@@ -355,7 +371,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
       setRecording(false);
       if (video?.uri) {
         const ext = (video.uri.split("/").pop()?.split(".").pop() ?? "mp4").split("?")[0].toLowerCase();
-        setVideoFile({ uri: video.uri, type: `video/${ext}`, name: `reel.${ext}`, isNative: true });
+        setVideoFile({ uri: video.uri, type: `video/${ext}`, name: `reel.${ext}`, isNative: true, isFront: facing === "front" });
         setStep("detalles");
       }
     } catch {
@@ -451,10 +467,14 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
       };
 
       // Intentar con columnas nuevas; si el schema no las tiene, reintentar sin ellas
+      const isFront = videoFile.isFront ?? false;
       let dbErr: any;
       ({ error: dbErr } = await supabase.from("videos_recetas").insert([
-        { ...base, views: 0, hashtags, filtro: selectedFilter !== "Normal" ? selectedFilter : null },
+        { ...base, views: 0, hashtags, filtro: selectedFilter !== "Normal" ? selectedFilter : null, camara_frontal: isFront },
       ]));
+      if (dbErr?.code === "42703" || dbErr?.message?.includes("column")) {
+        ({ error: dbErr } = await supabase.from("videos_recetas").insert([{ ...base, views: 0, hashtags, camara_frontal: isFront }]));
+      }
       if (dbErr?.code === "42703" || dbErr?.message?.includes("column")) {
         ({ error: dbErr } = await supabase.from("videos_recetas").insert([{ ...base, views: 0, hashtags }]));
       }
@@ -832,19 +852,6 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
               </View>
             )}
 
-            {/* Estado de publicación */}
-            <View style={{ backgroundColor: "#0F172A", borderRadius: 12, padding: 12, marginBottom: 14, gap: 4 }}>
-              <Text style={{ color: "#94A3B8", fontSize: 11, fontWeight: "700", marginBottom: 2 }}>ESTADO</Text>
-              <Text style={{ color: videoFile ? "#4ADE80" : "#EF4444", fontSize: 12 }}>
-                {videoFile ? `✓ Vídeo: ${videoFile.name ?? "video"} ${videoFile.size ? `(${(videoFile.size / 1024 / 1024).toFixed(1)} MB)` : ""}` : "✗ Sin vídeo — elige uno primero"}
-              </Text>
-              <Text style={{ color: recetaElegida ? "#4ADE80" : "#EF4444", fontSize: 12 }}>
-                {recetaElegida ? `✓ Receta: ${recetaElegida}` : "✗ Sin receta elegida"}
-              </Text>
-              <Text style={{ color: userId ? "#4ADE80" : "#EF4444", fontSize: 12 }}>
-                {userId ? "✓ Sesión activa" : "✗ No hay sesión — cierra y vuelve a abrir"}
-              </Text>
-            </View>
 
             <TouchableOpacity style={[m.publishBtn, (subiendo || !videoFile || !userId) && m.btnDis]} onPress={subir} disabled={subiendo || !videoFile || !userId}>
               {subiendo ? <ActivityIndicator color="#fff" size="small" /> : <Text style={m.publishTxt}>🎬 Publicar Reel</Text>}
@@ -866,7 +873,7 @@ export default function ReelsScreen() {
   const [siguiendoReels, setSiguiendoReels] = useState<Reel[]>([]);
   const [cargando, setCargando] = useState(true);
   const [activeIdx, setActiveIdx] = useState(0);
-  const [muted, setMuted] = useState(true);
+  const [muted, setMuted] = useState(false);
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const [seguidosIds, setSeguidosIds] = useState<Set<string>>(new Set());
   const [nombreUsuario, setNombreUsuario] = useState("");
