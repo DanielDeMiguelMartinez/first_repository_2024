@@ -525,13 +525,13 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
       {step === "camara" && (
         <View style={{ flex: 1, backgroundColor: "#000" }}>
           {Platform.OS === "web" ? (
-            /* Web: selector de archivo */
+            /* Web: cámara nativa del móvil + galería */
             <SafeAreaView style={[m.safe, { backgroundColor: "#0F172A" }]}>
               <View style={[m.header, { backgroundColor: "#0F172A" }]}>
                 <TouchableOpacity onPress={() => setStep("receta")}>
                   <Text style={[m.back, { color: "#58A6FF" }]}>← Receta</Text>
                 </TouchableOpacity>
-                <Text style={[m.title, { color: "#fff" }]}>🎬 Selecciona vídeo</Text>
+                <Text style={[m.title, { color: "#fff" }]}>🎬 Grabar vídeo</Text>
                 <View style={{ width: 60 }} />
               </View>
               <View style={m.steps}>
@@ -542,11 +542,46 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
                   </React.Fragment>
                 ))}
               </View>
-              <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 32 }}>
-                <TouchableOpacity style={m.picker} onPress={pickGallery}>
-                  <Text style={m.pickerIcon}>📁</Text>
-                  <Text style={m.pickerTxt}>Seleccionar vídeo</Text>
-                  <Text style={m.pickerHint}>MP4 · WebM · MOV · hasta 500 MB</Text>
+              <View style={{ flex: 1, justifyContent: "center", padding: 24, gap: 16 }}>
+                {/* Botón cámara — abre la cámara nativa del móvil directamente */}
+                <TouchableOpacity
+                  style={{ backgroundColor: "#1F6FEB", borderRadius: 20, padding: 24, alignItems: "center", gap: 8 }}
+                  onPress={() => {
+                    const input = document.createElement("input");
+                    input.type = "file";
+                    input.accept = "video/*";
+                    input.setAttribute("capture", "environment");
+                    input.onchange = (e: any) => {
+                      const file = e.target?.files?.[0];
+                      if (!file) return;
+                      if (webPreview) URL.revokeObjectURL(webPreview);
+                      setVideoFile(file);
+                      setWebPreview(URL.createObjectURL(file));
+                      setStep("detalles");
+                    };
+                    input.click();
+                  }}>
+                  <Text style={{ fontSize: 48 }}>📹</Text>
+                  <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800" }}>Grabar con cámara</Text>
+                  <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, textAlign: "center" }}>
+                    Abre la cámara del móvil directamente
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Separador */}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                  <View style={{ flex: 1, height: 1, backgroundColor: "#ffffff22" }} />
+                  <Text style={{ color: "#64748B", fontSize: 12 }}>o</Text>
+                  <View style={{ flex: 1, height: 1, backgroundColor: "#ffffff22" }} />
+                </View>
+
+                {/* Botón galería */}
+                <TouchableOpacity
+                  style={{ backgroundColor: "#1E293B", borderRadius: 20, padding: 20, alignItems: "center", gap: 6, borderWidth: 1, borderColor: "#334155" }}
+                  onPress={pickGallery}>
+                  <Text style={{ fontSize: 36 }}>🖼️</Text>
+                  <Text style={{ color: "#CBD5E1", fontSize: 15, fontWeight: "700" }}>Subir de galería</Text>
+                  <Text style={{ color: "#64748B", fontSize: 12 }}>MP4 · MOV · WebM · hasta 500 MB</Text>
                 </TouchableOpacity>
               </View>
             </SafeAreaView>
