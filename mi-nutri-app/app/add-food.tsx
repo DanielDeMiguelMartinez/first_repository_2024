@@ -462,11 +462,22 @@ export default function AddFoodScreen() {
 
       // ── Crea el objeto SR, lo guarda en ref (evita GC) y llama start() ───
       const arrancarReconocimiento = () => {
+        // Abortar cualquier reconocimiento previo que pudiera estar colgado
+        if (recognitionRef.current) {
+          try { recognitionRef.current.abort(); } catch {}
+          recognitionRef.current = null;
+        }
+
         const recognition = new SR();
         recognitionRef.current = recognition;   // ← CRÍTICO: evita el GC en Chrome Android
 
-        // Usar el idioma del navegador del usuario; fallback a español
-        recognition.lang = navigator.language || "es-ES";
+        // Normalizar código de idioma: iOS Safari necesita "es-ES" no "es"
+        const rawLang = navigator.language || "es-ES";
+        const fullLangMap: Record<string, string> = {
+          es: "es-ES", en: "en-US", fr: "fr-FR", de: "de-DE",
+          zh: "zh-CN", pt: "pt-PT", it: "it-IT", ja: "ja-JP",
+        };
+        recognition.lang = fullLangMap[rawLang] ?? rawLang;
         recognition.interimResults = false;
         recognition.continuous     = false;
         recognition.maxAlternatives = 3;
@@ -502,11 +513,11 @@ export default function AddFoodScreen() {
               Alert.alert("Sin micrófono", "No se detectó micrófono en el dispositivo.");
               break;
             case "language-not-supported":
-              // Reintentar con español si el idioma del dispositivo no está soportado
+              // Reintentar siempre con español explícito
               try {
                 const r2 = new SR();
                 recognitionRef.current = r2;
-                r2.lang = "es-ES";
+                r2.lang = "es-ES"; // fallback universal
                 r2.interimResults = false;
                 r2.continuous = false;
                 r2.maxAlternatives = 3;

@@ -50,6 +50,7 @@ export default function SettingsScreen() {
   const [userId, setUserId] = useState<string | null>(null);
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [confirmarBorrarFoto, setConfirmarBorrarFoto] = useState(false);
+  const [confirmarLogout, setConfirmarLogout] = useState(false);
   const [confirmarCerrarCuenta, setConfirmarCerrarCuenta] = useState(false);
   const [cerrandoCuenta, setCerrandoCuenta] = useState(false);
 
@@ -253,16 +254,12 @@ export default function SettingsScreen() {
     router.replace("/auth");
   };
 
-  const handleLogout = () => {
-    Alert.alert("Cerrar sesión", "¿Seguro que quieres cerrar sesión?", [
-      { text: "Cancelar", style: "cancel" },
-      {
-        text: "Cerrar sesión", style: "destructive", onPress: async () => {
-          await supabase.auth.signOut();
-          router.replace("/auth");
-        }
-      },
-    ]);
+  const handleLogout = () => setConfirmarLogout(true);
+
+  const confirmarLogoutAccion = async () => {
+    setConfirmarLogout(false);
+    await supabase.auth.signOut();
+    router.replace("/auth");
   };
 
   const languages: Language[] = ["es", "en", "fr", "de", "zh"];
@@ -356,6 +353,24 @@ export default function SettingsScreen() {
             </ScrollView>
           </View>
         </View>
+      </Modal>
+
+      {/* Modal: confirmar cerrar sesión */}
+      <Modal visible={confirmarLogout} transparent animationType="fade" onRequestClose={() => setConfirmarLogout(false)}>
+        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setConfirmarLogout(false)}>
+          <TouchableOpacity activeOpacity={1} style={s.popup}>
+            <Text style={s.popupTitle}>🚪 Cerrar sesión</Text>
+            <Text style={s.popupSubtitle}>¿Seguro que quieres cerrar sesión?</Text>
+            <View style={s.popupBtns}>
+              <TouchableOpacity style={s.cancelBtn} onPress={() => setConfirmarLogout(false)}>
+                <Text style={s.cancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.confirmBtn, { backgroundColor: "#EF4444" }]} onPress={confirmarLogoutAccion}>
+                <Text style={s.confirmText}>Cerrar sesión</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
 
       {/* Modal: confirmar borrar foto */}
