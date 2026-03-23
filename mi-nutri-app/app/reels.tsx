@@ -1227,7 +1227,8 @@ export default function ReelsScreen() {
                 ) : null}
 
                 {/* Botón guardar receta en mis recetas */}
-                {userId && recetaDetalle && (
+                {/* Solo visible para usuarios que NO publicaron el reel */}
+                {userId && modalReceta && modalReceta.autor_id !== userId && (
                   <TouchableOpacity
                     style={{
                       backgroundColor: recetaGuardada ? "#15803D" : "#1F6FEB",
@@ -1235,27 +1236,40 @@ export default function ReelsScreen() {
                       marginTop: 14, opacity: guardandoRecetaExt ? 0.7 : 1,
                     }}
                     onPress={async () => {
-                      if (recetaGuardada || guardandoRecetaExt) return;
+                      if (recetaGuardada || guardandoRecetaExt || !modalReceta) return;
                       setGuardandoRecetaExt(true);
-                      const ok = await crearReceta({
-                        nombre: recetaDetalle.nombre,
-                        descripcion: recetaDetalle.descripcion ?? "",
-                        ingredientes: recetaDetalle.ingredientes ?? [],
-                        calorias_total: recetaDetalle.calorias_total ?? 0,
-                        proteinas_total: recetaDetalle.proteinas_total ?? 0,
-                        grasas_total: recetaDetalle.grasas_total ?? 0,
-                        carbohidratos_total: recetaDetalle.carbohidratos_total ?? 0,
-                      });
+                      const SAVED_KEY = "nutri_recetas_guardadas";
+                      const raw = await AsyncStorage.getItem(SAVED_KEY);
+                      const lista = raw ? JSON.parse(raw) : [];
+                      if (!lista.some((r: any) => r.reel_id === modalReceta.id)) {
+                        await AsyncStorage.setItem(SAVED_KEY, JSON.stringify([
+                          ...lista,
+                          {
+                            pub_id: `reel_${modalReceta.id}`,
+                            reel_id: modalReceta.id,
+                            video_url: modalReceta.video_url,
+                            nombre: recetaDetalle?.nombre ?? modalReceta.titulo,
+                            descripcion: recetaDetalle?.descripcion ?? modalReceta.descripcion ?? "",
+                            ingredientes: recetaDetalle?.ingredientes ?? [],
+                            calorias_total: recetaDetalle?.calorias_total ?? 0,
+                            proteinas_total: recetaDetalle?.proteinas_total ?? 0,
+                            grasas_total: recetaDetalle?.grasas_total ?? 0,
+                            carbohidratos_total: recetaDetalle?.carbohidratos_total ?? 0,
+                            autor: modalReceta.autor ?? "",
+                            savedAt: Date.now(),
+                          },
+                        ]));
+                      }
                       setGuardandoRecetaExt(false);
-                      if (ok) { setRecetaGuardada(true); Alert.alert("✓ Guardada", "Receta añadida a tus recetas"); }
-                      else Alert.alert("Error", "No se pudo guardar la receta");
+                      setRecetaGuardada(true);
+                      Alert.alert("✓ Guardada", "Receta añadida a tus Guardadas");
                     }}
                     disabled={guardandoRecetaExt || recetaGuardada}
                   >
                     {guardandoRecetaExt
                       ? <ActivityIndicator color="#fff" size="small" />
                       : <Text style={{ color: "#fff", fontWeight: "800", fontSize: 14 }}>
-                          {recetaGuardada ? "✓ Receta guardada" : "💾 Guardar en mis recetas"}
+                          {recetaGuardada ? "✓ Guardada" : "💾 Guardar receta"}
                         </Text>
                     }
                   </TouchableOpacity>

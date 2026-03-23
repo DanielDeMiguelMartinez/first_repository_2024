@@ -19,6 +19,7 @@ import {
   Alert,
   Keyboard,
   Modal,
+  Platform,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -46,6 +47,8 @@ const SAVED_COMMUNITY_KEY = "nutri_recetas_guardadas";
 
 type RecetaGuardada = {
   pub_id: string;
+  reel_id?: string;
+  video_url?: string;
   nombre: string;
   descripcion: string;
   ingredientes: any[];
@@ -451,6 +454,7 @@ export default function RecetasScreen() {
   const [guardandoReceta, setGuardandoReceta] = useState(false);
   const [confirmarBorrar, setConfirmarBorrar] = useState<Receta | null>(null);
   const [confirmarBorrarGuardada, setConfirmarBorrarGuardada] = useState<RecetaGuardada | null>(null);
+  const [videoReelAbierto, setVideoReelAbierto] = useState<RecetaGuardada | null>(null);
   const [tab, setTab] = useState<"mias" | "guardadas">("mias");
   const [recetasGuardadas, setRecetasGuardadas] = useState<RecetaGuardada[]>([]);
   const [nombreUsuario, setNombreUsuario] = useState("");
@@ -858,6 +862,13 @@ export default function RecetasScreen() {
                 <TouchableOpacity style={s.anadirBtn} onPress={() => setModalAnadirGuardada(rg)}>
                   <Text style={s.anadirBtnText}>+ Añadir al día</Text>
                 </TouchableOpacity>
+                {rg.video_url && (
+                  <TouchableOpacity
+                    style={{ backgroundColor: "#1F6FEB22", borderRadius: 10, padding: 10, alignItems: "center", marginTop: 6, borderWidth: 1, borderColor: "#1F6FEB44" }}
+                    onPress={() => setVideoReelAbierto(rg)}>
+                    <Text style={{ color: "#60A5FA", fontWeight: "700", fontSize: 13 }}>▶ Ver reel</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             ))
           )
@@ -919,6 +930,35 @@ export default function RecetasScreen() {
                 <Text style={s.confirmText}>Quitar</Text>
               </TouchableOpacity>
             </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Modal reproducir reel guardado */}
+      <Modal visible={!!videoReelAbierto} transparent animationType="fade" onRequestClose={() => setVideoReelAbierto(null)}>
+        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setVideoReelAbierto(null)}>
+          <TouchableOpacity activeOpacity={1} style={[s.popup, { padding: 0, overflow: "hidden" as const, backgroundColor: "#0F172A" }]}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 14 }}>
+              <Text style={[s.popupTitle, { marginBottom: 0, flex: 1 }]} numberOfLines={1}>🎬 {videoReelAbierto?.nombre}</Text>
+              <TouchableOpacity onPress={() => setVideoReelAbierto(null)}>
+                <Text style={{ color: "#94A3B8", fontSize: 22, fontWeight: "300" }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {Platform.OS === "web" && videoReelAbierto?.video_url
+              ? (React.createElement as any)("video", {
+                  src: videoReelAbierto.video_url,
+                  style: { width: "100%", maxHeight: 420, objectFit: "contain", backgroundColor: "#000", display: "block" },
+                  controls: true,
+                  autoPlay: true,
+                  playsInline: true,
+                  loop: true,
+                })
+              : <View style={{ height: 120, justifyContent: "center", alignItems: "center", gap: 8 }}>
+                  <Text style={{ fontSize: 40 }}>🎬</Text>
+                  <Text style={{ color: "#94A3B8", fontSize: 12 }}>Disponible en la versión web</Text>
+                </View>
+            }
+            <Text style={{ color: "#64748B", fontSize: 12, padding: 12 }}>por @{videoReelAbierto?.autor}</Text>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>

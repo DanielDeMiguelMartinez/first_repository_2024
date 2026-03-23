@@ -111,6 +111,7 @@ function ModalDetalle({
   const { colors, theme } = useApp();
   const [valoraciones, setValoraciones] = useState<Valoracion[]>([]);
   const [cargando, setCargando] = useState(false);
+  const [valorAvatarMap, setValorAvatarMap] = useState<Record<string, string>>({});
   const [estrellas, setEstrellas] = useState(0);
   const [comentario, setComentario] = useState("");
   const [enviando, setEnviando] = useState(false);
@@ -139,7 +140,16 @@ function ModalDetalle({
       .select("id, publicacion_id, autor, autor_avatar, estrellas, comentario, creado_en")
       .eq("publicacion_id", pub.id)
       .order("creado_en", { ascending: false });
-    setValoraciones((data || []).map((v: any) => ({ ...v, autor_avatar: v.autor_avatar ?? null })));
+    const lista = (data || []).map((v: any) => ({ ...v, autor_avatar: v.autor_avatar ?? null }));
+    setValoraciones(lista);
+    // Cargar fotos de perfil actuales de los comentaristas
+    const uniqueAuthors = [...new Set(lista.map((v: any) => v.autor).filter(Boolean))];
+    if (uniqueAuthors.length > 0) {
+      const { data: perfilesData } = await supabase.from("perfiles").select("nombre, avatar_url").in("nombre", uniqueAuthors as string[]);
+      const map: Record<string, string> = {};
+      (perfilesData || []).forEach((p: any) => { if (p.nombre && p.avatar_url) map[p.nombre] = p.avatar_url; });
+      setValorAvatarMap(map);
+    }
     setCargando(false);
   };
 
@@ -352,8 +362,8 @@ function ModalDetalle({
                   <View key={v.id} style={d.commentCard}>
                     <View style={d.commentHeader}>
                       <View style={d.commentAuthorRow}>
-                        {(v.autor === nombreUsuario ? avatarUri : null) ?? v.autor_avatar
-                          ? <Image source={{ uri: (v.autor === nombreUsuario ? avatarUri : null) ?? v.autor_avatar! }} style={{ width: 32, height: 32, borderRadius: 16, marginRight: 8 }} />
+                        {(valorAvatarMap[v.autor] ?? (v.autor === nombreUsuario ? avatarUri : null) ?? v.autor_avatar)
+                          ? <Image source={{ uri: (valorAvatarMap[v.autor] ?? (v.autor === nombreUsuario ? avatarUri : null) ?? v.autor_avatar)! }} style={{ width: 32, height: 32, borderRadius: 16, marginRight: 8 }} />
                           : <View style={d.avatar}><Text style={d.avatarText}>{(v.autor || "A")[0].toUpperCase()}</Text></View>
                         }
                         <View>
@@ -520,6 +530,7 @@ export default function ComunidadScreen() {
   const [nombreUsuario, setNombreUsuario] = useState("");
   const [filtro, setFiltro] = useState<"recientes" | "mejor_valoradas">("recientes");
   const [confirmarBorrar, setConfirmarBorrar] = useState<Publicacion | null>(null);
+  const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
 
   useFocusEffect(useCallback(() => {
     cargarPublicaciones();
@@ -565,6 +576,14 @@ export default function ComunidadScreen() {
         creado_en: item.creado_en ?? new Date().toISOString(),
       }));
     setPublicaciones(limpias);
+    // Cargar fotos de perfil actuales para todos los autores
+    const uniqueAuthors = [...new Set(limpias.map((p: any) => p.autor).filter(Boolean))];
+    if (uniqueAuthors.length > 0) {
+      const { data: perfilesData } = await supabase.from("perfiles").select("nombre, avatar_url").in("nombre", uniqueAuthors as string[]);
+      const map: Record<string, string> = {};
+      (perfilesData || []).forEach((p: any) => { if (p.nombre && p.avatar_url) map[p.nombre] = p.avatar_url; });
+      setAvatarMap(map);
+    }
     setCargando(false);
   };
 
@@ -663,8 +682,8 @@ export default function ComunidadScreen() {
               activeOpacity={0.7}
             >
               <View style={s.cardHeader}>
-                {(pub.autor === nombreUsuario ? avatarUri : null) ?? pub.autor_avatar
-                  ? <Image source={{ uri: ((pub.autor === nombreUsuario ? avatarUri : null) ?? pub.autor_avatar)! }} style={{ width: 34, height: 34, borderRadius: 17, marginRight: 8 }} />
+                {(avatarMap[pub.autor] ?? (pub.autor === nombreUsuario ? avatarUri : null) ?? pub.autor_avatar)
+                  ? <Image source={{ uri: (avatarMap[pub.autor] ?? (pub.autor === nombreUsuario ? avatarUri : null) ?? pub.autor_avatar)! }} style={{ width: 34, height: 34, borderRadius: 17, marginRight: 8 }} />
                   : <View style={s.avatarSmall}><Text style={s.avatarSmallText}>{(pub.autor || "A")[0].toUpperCase()}</Text></View>
                 }
                 <View style={s.cardAuthorInfo}>
