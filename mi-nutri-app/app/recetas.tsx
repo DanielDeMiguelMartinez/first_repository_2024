@@ -7,8 +7,10 @@ import {
   eliminarReceta,
   IngredienteReceta,
   obtenerRecetas,
-  Receta
+  Receta,
+  supabase,
 } from "@/app/services/supabase";
+import { useAvatar } from "@/app/services/useAvatar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
@@ -451,11 +453,20 @@ export default function RecetasScreen() {
   const [confirmarBorrarGuardada, setConfirmarBorrarGuardada] = useState<RecetaGuardada | null>(null);
   const [tab, setTab] = useState<"mias" | "guardadas">("mias");
   const [recetasGuardadas, setRecetasGuardadas] = useState<RecetaGuardada[]>([]);
+  const [nombreUsuario, setNombreUsuario] = useState("");
+  const [publicandoId, setPublicandoId] = useState("");
+  const avatarUri = useAvatar();
 
   useFocusEffect(React.useCallback(() => {
     cargarRecetasList();
     AsyncStorage.getItem(SAVED_COMMUNITY_KEY).then((raw) => {
       setRecetasGuardadas(raw ? JSON.parse(raw) : []);
+    });
+    supabase.auth.getSession().then(({ data }) => {
+      const uid = data.session?.user?.id;
+      if (!uid) return;
+      supabase.from("perfiles").select("nombre").eq("id", uid).single()
+        .then(({ data: p }) => { if (p?.nombre) setNombreUsuario(p.nombre); });
     });
   }, []));
 
@@ -477,6 +488,25 @@ export default function RecetasScreen() {
     } finally {
       setCargando(false);
     }
+  };
+
+  const publicarReceta = async (receta: Receta) => {
+    if (!nombreUsuario) { Alert.alert("", "Inicia sesión para publicar."); return; }
+    setPublicandoId(receta.id ?? "");
+    const { error } = await supabase.from("publicaciones_recetas").insert([{
+      nombre_receta: receta.nombre,
+      descripcion: receta.descripcion || "",
+      ingredientes: receta.ingredientes || [],
+      calorias_total: safeNum(receta.calorias_total),
+      proteinas_total: safeNum(receta.proteinas_total),
+      grasas_total: safeNum(receta.grasas_total),
+      carbohidratos_total: safeNum(receta.carbohidratos_total),
+      autor: nombreUsuario,
+      autor_avatar: avatarUri || null,
+    }]);
+    setPublicandoId("");
+    if (error) { Alert.alert("Error", "No se pudo publicar."); return; }
+    Alert.alert("✓ Publicada", `"${receta.nombre}" ya está visible en la Comunidad 🎉`);
   };
 
   const cargarIngredientePorCodigo = async (codigo: string) => {
@@ -768,6 +798,13 @@ export default function RecetasScreen() {
                 <View style={s.cardBtnsRow}>
                   <TouchableOpacity style={[s.anadirBtn, { flex: 1 }]} onPress={() => setModalAnadir(receta)}>
                     <Text style={s.anadirBtnText}>+ Añadir al día</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[s.reelBtn, { backgroundColor: "#1F6FEB22", borderColor: "#1F6FEB55" }]}
+                    onPress={() => publicarReceta(receta)}
+                    disabled={publicandoId === (receta.id ?? "")}
+                  >
+                    <Text style={s.reelBtnText}>{publicandoId === (receta.id ?? "") ? "⏳" : "🌍"}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={s.reelBtn}

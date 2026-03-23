@@ -106,10 +106,10 @@ const vid = StyleSheet.create({
 });
 
 // ─── Tarjeta de reel (pantalla completa) ──────────────────────────────────────
-function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, onFollow, esMio, onDelete }: {
+function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, onFollow, esMio, onDelete, onVerReceta }: {
   reel: Reel; active: boolean; muted: boolean; onToggleMute: () => void;
   liked: boolean; onLike: () => void; seguido: boolean; onFollow: () => void;
-  esMio: boolean; onDelete: () => void;
+  esMio: boolean; onDelete: () => void; onVerReceta: () => void;
 }) {
   const [showDesc, setShowDesc] = useState(false);
 
@@ -152,6 +152,10 @@ function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, o
         <TouchableOpacity style={r.actionBtn} onPress={onLike}>
           <Text style={r.actionIcon}>{liked ? "❤️" : "🤍"}</Text>
           <Text style={r.actionLbl}>{reel.likes + (liked ? 1 : 0)}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={r.actionBtn} onPress={onVerReceta}>
+          <Text style={r.actionIcon}>📋</Text>
+          <Text style={r.actionLbl}>Receta</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -477,6 +481,9 @@ export default function ReelsScreen() {
   const [modalSubir, setModalSubir] = useState(false);
   const [recetaPrevia, setRecetaPrevia] = useState<string | undefined>();
   const [confirmarBorrar, setConfirmarBorrar] = useState<Reel | null>(null);
+  const [modalReceta, setModalReceta] = useState<Reel | null>(null);
+  const [recetaDetalle, setRecetaDetalle] = useState<any>(null);
+  const [cargandoReceta, setCargandoReceta] = useState(false);
 
   // Si viene desde recetas.tsx con una receta pre-seleccionada
   useEffect(() => {
@@ -558,6 +565,20 @@ export default function ReelsScreen() {
     cargarDatos();
   };
 
+  const abrirReceta = async (reel: Reel) => {
+    setModalReceta(reel);
+    setRecetaDetalle(null);
+    setCargandoReceta(true);
+    const { data } = await supabase
+      .from("recetas")
+      .select("nombre,descripcion,ingredientes,calorias_total,proteinas_total,grasas_total,carbohidratos_total")
+      .eq("nombre", reel.titulo)
+      .limit(1)
+      .single();
+    setRecetaDetalle(data ?? null);
+    setCargandoReceta(false);
+  };
+
   const lista = tab === "parati" ? reels : siguiendoReels;
 
   return (
@@ -614,6 +635,7 @@ export default function ReelsScreen() {
               onFollow={() => handleFollow(reel)}
               esMio={reel.autor_id === userId}
               onDelete={() => setConfirmarBorrar(reel)}
+              onVerReceta={() => abrirReceta(reel)}
             />
           ))}
         </ScrollView>
@@ -650,6 +672,74 @@ export default function ReelsScreen() {
         userId={userId}
         recetaPrevia={recetaPrevia}
       />
+
+      {/* ── Modal ver receta ── */}
+      <Modal visible={!!modalReceta} transparent animationType="slide" onRequestClose={() => setModalReceta(null)}>
+        <TouchableOpacity style={p.overlay} activeOpacity={1} onPress={() => setModalReceta(null)}>
+          <TouchableOpacity activeOpacity={1} style={[p.box, { maxHeight: "80%" as any }]}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <Text style={[p.title, { flex: 1 }]}>🍽 {modalReceta?.titulo}</Text>
+              <TouchableOpacity onPress={() => setModalReceta(null)}>
+                <Text style={{ color: "#94A3B8", fontSize: 22, fontWeight: "300" }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={{ color: "#94A3B8", fontSize: 12, marginBottom: 12 }}>por @{modalReceta?.autor}</Text>
+
+            {cargandoReceta ? (
+              <ActivityIndicator color="#58A6FF" style={{ marginVertical: 20 }} />
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {/* Macros */}
+                {recetaDetalle && (
+                  <View style={{ flexDirection: "row", gap: 8, marginBottom: 16 }}>
+                    {[
+                      { val: Math.round(recetaDetalle.calorias_total ?? 0), label: "kcal", color: "#4ADE80" },
+                      { val: Math.round(recetaDetalle.proteinas_total ?? 0) + "g", label: "Prot", color: "#60A5FA" },
+                      { val: Math.round(recetaDetalle.carbohidratos_total ?? 0) + "g", label: "Carbos", color: "#FBBF24" },
+                      { val: Math.round(recetaDetalle.grasas_total ?? 0) + "g", label: "Grasas", color: "#F87171" },
+                    ].map(m => (
+                      <View key={m.label} style={{ flex: 1, backgroundColor: "#ffffff11", borderRadius: 10, padding: 10, alignItems: "center" }}>
+                        <Text style={{ color: m.color, fontSize: 15, fontWeight: "800" }}>{m.val}</Text>
+                        <Text style={{ color: "#94A3B8", fontSize: 10, marginTop: 2 }}>{m.label}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {/* Descripción */}
+                {(recetaDetalle?.descripcion || modalReceta?.descripcion) ? (
+                  <View style={{ marginBottom: 14 }}>
+                    <Text style={{ color: "#fff", fontWeight: "700", marginBottom: 6 }}>📝 Descripción</Text>
+                    <Text style={{ color: "#CBD5E1", fontSize: 13, lineHeight: 20 }}>
+                      {recetaDetalle?.descripcion || modalReceta?.descripcion}
+                    </Text>
+                  </View>
+                ) : null}
+
+                {/* Ingredientes */}
+                {recetaDetalle?.ingredientes?.length > 0 ? (
+                  <View style={{ marginBottom: 14 }}>
+                    <Text style={{ color: "#fff", fontWeight: "700", marginBottom: 8 }}>🥗 Ingredientes</Text>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+                      {recetaDetalle.ingredientes.map((ing: any, i: number) => (
+                        <View key={i} style={{ backgroundColor: "#1F6FEB22", borderWidth: 1, borderColor: "#1F6FEB44", borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5 }}>
+                          <Text style={{ color: "#93C5FD", fontSize: 12, fontWeight: "600" }}>{ing.nombre} {ing.gramos}g</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                ) : !cargandoReceta && !recetaDetalle ? (
+                  <Text style={{ color: "#64748B", fontSize: 13, textAlign: "center", marginVertical: 10 }}>
+                    No se encontraron detalles de esta receta
+                  </Text>
+                ) : null}
+
+                <View style={{ height: 8 }} />
+              </ScrollView>
+            )}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Confirmar borrar */}
       <Modal visible={!!confirmarBorrar} transparent animationType="fade" onRequestClose={() => setConfirmarBorrar(null)}>
