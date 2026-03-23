@@ -1,5 +1,5 @@
 import { useApp } from "@/app/services/i18n";
-import { supabase } from "@/app/services/supabase";
+import { crearReceta, supabase } from "@/app/services/supabase";
 import { useAvatar } from "@/app/services/useAvatar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
@@ -183,8 +183,15 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
   const [step, setStep] = useState<"receta" | "video">("receta");
   const [recetas, setRecetas] = useState<RecetaItem[]>([]);
   const [recetaElegida, setRecetaElegida] = useState<string>(recetaPrevia ?? "");
-  const [nuevaReceta, setNuevaReceta] = useState("");
-  const [modoNueva, setModoNueva] = useState(false);
+  const [modoCrear, setModoCrear] = useState(false);
+  // Campos crear receta nueva
+  const [nuevaNombre, setNuevaNombre] = useState("");
+  const [nuevaDesc, setNuevaDesc] = useState("");
+  const [nuevaKcal, setNuevaKcal] = useState("");
+  const [nuevaProt, setNuevaProt] = useState("");
+  const [nuevaCarbos, setNuevaCarbos] = useState("");
+  const [nuevaGrasas, setNuevaGrasas] = useState("");
+  const [guardandoReceta, setGuardandoReceta] = useState(false);
   const [descripcion, setDescripcion] = useState("");
   const [videoFile, setVideoFile] = useState<any>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -203,13 +210,31 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
   }, [visible, userId, recetaPrevia]);
 
   const limpiar = () => {
-    setStep("receta"); setRecetaElegida(""); setNuevaReceta(""); setModoNueva(false);
+    setStep("receta"); setRecetaElegida(""); setModoCrear(false);
+    setNuevaNombre(""); setNuevaDesc(""); setNuevaKcal(""); setNuevaProt(""); setNuevaCarbos(""); setNuevaGrasas("");
     setDescripcion(""); setVideoFile(null); setPreview(null); setSubiendo(false); setProgreso(0);
   };
 
   const cerrar = () => { limpiar(); onClose(); };
 
   const elegirReceta = (nombre: string) => { setRecetaElegida(nombre); setStep("video"); };
+
+  const guardarNuevaReceta = async () => {
+    const nombre = nuevaNombre.trim();
+    if (!nombre) return;
+    setGuardandoReceta(true);
+    await crearReceta({
+      nombre,
+      descripcion: nuevaDesc.trim(),
+      ingredientes: [],
+      calorias_total: parseFloat(nuevaKcal) || 0,
+      proteinas_total: parseFloat(nuevaProt) || 0,
+      grasas_total: parseFloat(nuevaGrasas) || 0,
+      carbohidratos_total: parseFloat(nuevaCarbos) || 0,
+    });
+    setGuardandoReceta(false);
+    elegirReceta(nombre);
+  };
 
   const seleccionarVideo = () => {
     if (Platform.OS !== "web") { Alert.alert("Próximamente", "Subida desde app nativa disponible pronto."); return; }
@@ -276,8 +301,14 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
       <SafeAreaView style={m.safe}>
         {/* Cabecera */}
         <View style={m.header}>
-          <TouchableOpacity onPress={step === "video" && !recetaPrevia ? () => setStep("receta") : cerrar}>
-            <Text style={m.back}>{step === "video" && !recetaPrevia ? "← Receta" : "✕ Cerrar"}</Text>
+          <TouchableOpacity onPress={
+            modoCrear ? () => setModoCrear(false)
+            : step === "video" && !recetaPrevia ? () => setStep("receta")
+            : cerrar
+          }>
+            <Text style={m.back}>
+              {modoCrear ? "← Recetas" : step === "video" && !recetaPrevia ? "← Receta" : "✕ Cerrar"}
+            </Text>
           </TouchableOpacity>
           <Text style={m.title}>
             {step === "receta" ? "📋 Elige la receta" : `🎬 Vídeo de «${tituloReceta}»`}
@@ -295,45 +326,74 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
         {/* ── PASO 1: elegir receta ── */}
         {step === "receta" && (
           <ScrollView style={m.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            {!modoNueva ? (
+            {!modoCrear ? (
               <>
-                {recetas.length === 0 ? (
+                {recetas.map(rec => (
+                  <TouchableOpacity key={rec.id} style={m.recetaCard} onPress={() => elegirReceta(rec.nombre)}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={m.recetaNombre}>{rec.nombre}</Text>
+                      {rec.descripcion ? <Text style={m.recetaDesc} numberOfLines={1}>{rec.descripcion}</Text> : null}
+                    </View>
+                    <Text style={m.recetaFlecha}>→</Text>
+                  </TouchableOpacity>
+                ))}
+                {recetas.length === 0 && (
                   <View style={m.emptyBox}>
                     <Text style={m.emptyIcon}>🍳</Text>
                     <Text style={m.emptyTxt}>No tienes recetas aún</Text>
-                    <Text style={m.emptyHint}>Crea una desde la sección Recetas y vuelve aquí</Text>
+                    <Text style={m.emptyHint}>Crea una nueva abajo o ve a la sección Recetas</Text>
                   </View>
-                ) : (
-                  recetas.map(rec => (
-                    <TouchableOpacity key={rec.id} style={m.recetaCard} onPress={() => elegirReceta(rec.nombre)}>
-                      <Text style={m.recetaNombre}>{rec.nombre}</Text>
-                      {rec.descripcion ? <Text style={m.recetaDesc} numberOfLines={1}>{rec.descripcion}</Text> : null}
-                      <Text style={m.recetaFlecha}>→</Text>
-                    </TouchableOpacity>
-                  ))
                 )}
-                <TouchableOpacity style={m.nuevaBtn} onPress={() => setModoNueva(true)}>
-                  <Text style={m.nuevaBtnTxt}>+ Crear nombre de receta nuevo</Text>
+                <TouchableOpacity style={m.nuevaBtn} onPress={() => setModoCrear(true)}>
+                  <Text style={m.nuevaBtnTxt}>+ Crear receta nueva</Text>
                 </TouchableOpacity>
               </>
             ) : (
               <View style={m.nuevaBox}>
-                <Text style={m.nuevaLabel}>Nombre de la receta</Text>
+                <Text style={m.nuevaLabel}>Nombre de la receta *</Text>
                 <TextInput
-                  style={m.input} value={nuevaReceta} onChangeText={setNuevaReceta}
+                  style={m.input} value={nuevaNombre} onChangeText={setNuevaNombre}
                   placeholder="Ej: Pasta carbonara casera" placeholderTextColor={colors.textMuted}
                   autoFocus maxLength={80}
                 />
-                <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
-                  <TouchableOpacity style={m.cancelBtn} onPress={() => setModoNueva(false)}>
+                <Text style={[m.nuevaLabel, { marginTop: 12 }]}>Descripción (opcional)</Text>
+                <TextInput
+                  style={[m.input, { height: 70 }]} value={nuevaDesc} onChangeText={setNuevaDesc}
+                  placeholder="Pasos, ingredientes, consejos..." placeholderTextColor={colors.textMuted}
+                  multiline numberOfLines={3} maxLength={200}
+                />
+                <Text style={[m.nuevaLabel, { marginTop: 12 }]}>Macros (opcional)</Text>
+                <View style={{ flexDirection: "row", gap: 8, marginBottom: 4 }}>
+                  {[
+                    { label: "kcal", val: nuevaKcal, set: setNuevaKcal, color: "#4ADE80" },
+                    { label: "Prot g", val: nuevaProt, set: setNuevaProt, color: "#60A5FA" },
+                    { label: "Carbos g", val: nuevaCarbos, set: setNuevaCarbos, color: "#FBBF24" },
+                    { label: "Grasas g", val: nuevaGrasas, set: setNuevaGrasas, color: "#F87171" },
+                  ].map(f => (
+                    <View key={f.label} style={{ flex: 1 }}>
+                      <Text style={{ color: f.color, fontSize: 10, fontWeight: "700", marginBottom: 3 }}>{f.label}</Text>
+                      <TextInput
+                        style={[m.input, { paddingVertical: 8, textAlign: "center" }]}
+                        value={f.val} onChangeText={f.set}
+                        placeholder="0" placeholderTextColor={colors.textMuted}
+                        keyboardType="numeric" maxLength={6}
+                      />
+                    </View>
+                  ))}
+                </View>
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+                  <TouchableOpacity style={m.cancelBtn} onPress={() => setModoCrear(false)}>
                     <Text style={m.cancelTxt}>Cancelar</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[m.nextBtn, !nuevaReceta.trim() && m.btnDis]}
-                    onPress={() => nuevaReceta.trim() && elegirReceta(nuevaReceta.trim())}
-                    disabled={!nuevaReceta.trim()}
+                    style={[m.nextBtn, (!nuevaNombre.trim() || guardandoReceta) && m.btnDis]}
+                    onPress={guardarNuevaReceta}
+                    disabled={!nuevaNombre.trim() || guardandoReceta}
                   >
-                    <Text style={m.nextBtnTxt}>Usar este nombre →</Text>
+                    {guardandoReceta
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Text style={m.nextBtnTxt}>Guardar y continuar →</Text>
+                    }
                   </TouchableOpacity>
                 </View>
               </View>
@@ -404,9 +464,9 @@ export default function ReelsScreen() {
   const router = useRouter();
   const { colors, theme } = useApp();
   const params = useLocalSearchParams<{ recetaNombre?: string }>();
-  const [tab, setTab] = useState<"parati" | "amigos">("parati");
+  const [tab, setTab] = useState<"parati" | "siguiendo">("parati");
   const [reels, setReels] = useState<Reel[]>([]);
-  const [amigosReels, setAmigosReels] = useState<Reel[]>([]);
+  const [siguiendoReels, setSiguiendoReels] = useState<Reel[]>([]);
   const [cargando, setCargando] = useState(true);
   const [activeIdx, setActiveIdx] = useState(0);
   const [muted, setMuted] = useState(true);
@@ -455,8 +515,8 @@ export default function ReelsScreen() {
         const ids = (segs ?? []).map((s: any) => s.followed_id);
         if (ids.length > 0) {
           const { data } = await supabase.from("videos_recetas").select("*").in("autor_id", ids).order("creado_en", { ascending: false });
-          setAmigosReels((data ?? []).filter((r: any) => r.video_url));
-        } else setAmigosReels([]);
+          setSiguiendoReels((data ?? []).filter((r: any) => r.video_url));
+        } else setSiguiendoReels([]);
       }
     } finally { setCargando(false); }
   };
@@ -470,7 +530,7 @@ export default function ReelsScreen() {
     await AsyncStorage.setItem(LIKED_KEY, JSON.stringify([...next]));
     await supabase.from("videos_recetas").update({ likes: Math.max(0, reel.likes + delta) }).eq("id", reel.id);
     const upd = (list: Reel[]) => list.map(r => r.id === reel.id ? { ...r, likes: Math.max(0, r.likes + delta) } : r);
-    setReels(upd); setAmigosReels(upd);
+    setReels(upd); setSiguiendoReels(upd);
   };
 
   const handleFollow = async (reel: Reel) => {
@@ -498,7 +558,7 @@ export default function ReelsScreen() {
     cargarDatos();
   };
 
-  const lista = tab === "parati" ? reels : amigosReels;
+  const lista = tab === "parati" ? reels : siguiendoReels;
 
   return (
     <View style={{ flex: 1, backgroundColor: "#000" }}>
@@ -511,12 +571,12 @@ export default function ReelsScreen() {
         </View>
       ) : lista.length === 0 ? (
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 40 }}>
-          <Text style={{ fontSize: 64 }}>{tab === "amigos" ? "👥" : "🎬"}</Text>
+          <Text style={{ fontSize: 64 }}>{tab === "siguiendo" ? "👥" : "🎬"}</Text>
           <Text style={{ color: "#fff", fontSize: 22, fontWeight: "800", marginTop: 20, textAlign: "center" }}>
-            {tab === "amigos" ? "Sigue a alguien primero" : "Sin reels todavía"}
+            {tab === "siguiendo" ? "Sin reels de tus seguidos" : "Sin reels todavía"}
           </Text>
           <Text style={{ color: "#94A3B8", fontSize: 14, marginTop: 10, textAlign: "center", lineHeight: 22 }}>
-            {tab === "amigos"
+            {tab === "siguiendo"
               ? "Ve a «Para ti», mira reels de otros y toca ＋ para seguirlos"
               : "Sé el primero en compartir tu receta en vídeo"}
           </Text>
@@ -569,9 +629,9 @@ export default function ReelsScreen() {
             <TouchableOpacity onPress={() => { setTab("parati"); setActiveIdx(0); }}>
               <Text style={[h.tab, tab === "parati" && h.tabActive]}>Para ti</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => { setTab("amigos"); setActiveIdx(0); }}>
-              <Text style={[h.tab, tab === "amigos" && h.tabActive]}>
-                Amigos{seguidosIds.size > 0 ? ` (${seguidosIds.size})` : ""}
+            <TouchableOpacity onPress={() => { setTab("siguiendo"); setActiveIdx(0); }}>
+              <Text style={[h.tab, tab === "siguiendo" && h.tabActive]}>
+                Siguiendo{seguidosIds.size > 0 ? ` (${seguidosIds.size})` : ""}
               </Text>
             </TouchableOpacity>
           </View>

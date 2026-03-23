@@ -471,11 +471,23 @@ export default function AddFoodScreen() {
         recognition.continuous     = false;
         recognition.maxAlternatives = 3;
 
+        // Auto-cancelar tras 15 s si el navegador no responde
+        const timeoutId = setTimeout(() => {
+          if (recognitionRef.current === recognition) {
+            try { recognition.abort(); } catch {}
+            setEscuchando(false);
+            recognitionRef.current = null;
+          }
+        }, 15000);
+
+        const limpiarTimeout = () => clearTimeout(timeoutId);
+
         recognition.onstart  = () => setEscuchando(true);
-        recognition.onend    = () => { setEscuchando(false); recognitionRef.current = null; };
-        recognition.onnomatch = () => { setEscuchando(false); recognitionRef.current = null; };
+        recognition.onend    = () => { limpiarTimeout(); setEscuchando(false); recognitionRef.current = null; };
+        recognition.onnomatch = () => { limpiarTimeout(); setEscuchando(false); recognitionRef.current = null; };
 
         recognition.onerror = (e: any) => {
+          limpiarTimeout();
           setEscuchando(false);
           recognitionRef.current = null;
           switch (e.error) {
@@ -520,6 +532,7 @@ export default function AddFoodScreen() {
         };
 
         recognition.onresult = (e: any) => {
+          limpiarTimeout();
           setEscuchando(false);
           recognitionRef.current = null;
           for (let i = 0; i < (e.results?.length ?? 0); i++) {
@@ -530,9 +543,18 @@ export default function AddFoodScreen() {
 
         try {
           recognition.start();
-        } catch {
+        } catch (err: any) {
+          limpiarTimeout();
           setEscuchando(false);
           recognitionRef.current = null;
+          const name = err?.name ?? "";
+          if (name === "NotAllowedError" || name === "SecurityError") {
+            Alert.alert("🎤 Micrófono bloqueado", instruccionesPermiso, [{ text: "Entendido" }]);
+          } else if (name === "InvalidStateError") {
+            // ya había un reconocimiento activo — ignorar
+          } else {
+            Alert.alert("Error de voz", err?.message ?? "No se pudo iniciar el micrófono. Recarga la página e inténtalo de nuevo.");
+          }
         }
       };
 
