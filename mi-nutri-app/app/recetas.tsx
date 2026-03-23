@@ -765,9 +765,17 @@ export default function RecetasScreen() {
                     </View>
                   ))}
                 </View>
-                <TouchableOpacity style={s.anadirBtn} onPress={() => setModalAnadir(receta)}>
-                  <Text style={s.anadirBtnText}>+ Añadir al día</Text>
-                </TouchableOpacity>
+                <View style={s.cardBtnsRow}>
+                  <TouchableOpacity style={[s.anadirBtn, { flex: 1 }]} onPress={() => setModalAnadir(receta)}>
+                    <Text style={s.anadirBtnText}>+ Añadir al día</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={s.reelBtn}
+                    onPress={() => router.push({ pathname: "/reels", params: { recetaNombre: receta.nombre } })}
+                  >
+                    <Text style={s.reelBtnText}>📹</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             ))
           )
@@ -990,8 +998,11 @@ function makeSStyles(c: any) { return StyleSheet.create({
   macroBox: { flex: 1, backgroundColor: c.bg, borderRadius: 10, padding: 10, alignItems: "center" },
   macroVal: { fontSize: 15, fontWeight: "800" },
   macroLabel: { color: c.textMuted, fontSize: 10, marginTop: 2 },
+  cardBtnsRow: { flexDirection: "row", gap: 8, alignItems: "center" },
   anadirBtn: { backgroundColor: "#1F6FEB22", borderWidth: 1, borderColor: "#1F6FEB55", borderRadius: 10, padding: 12, alignItems: "center" },
   anadirBtnText: { color: "#58A6FF", fontSize: 14, fontWeight: "700" },
+  reelBtn: { backgroundColor: "#7C3AED22", borderWidth: 1, borderColor: "#7C3AED55", borderRadius: 10, padding: 12, alignItems: "center", justifyContent: "center" },
+  reelBtnText: { fontSize: 18 },
   modalHeader: { paddingTop: 16, paddingBottom: 8, gap: 4 },
   overlay: { flex: 1, backgroundColor: "#000000AA", justifyContent: "center", alignItems: "center", padding: 20 },
   popup: { backgroundColor: c.card, borderRadius: 24, padding: 24, width: "100%", borderWidth: 1, borderColor: c.cardBorder, gap: 16 },

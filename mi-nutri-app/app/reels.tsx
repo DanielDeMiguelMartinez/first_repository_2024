@@ -2,10 +2,10 @@ import { useApp } from "@/app/services/i18n";
 import { supabase } from "@/app/services/supabase";
 import { useAvatar } from "@/app/services/useAvatar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Dimensions, Image, Modal, Platform,
+  ActivityIndicator, Alert, Dimensions, Modal, Platform,
   SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput,
   TouchableOpacity, View,
 } from "react-native";
@@ -14,15 +14,11 @@ const { width: SW, height: SH } = Dimensions.get("window");
 const LIKED_KEY = "nutri_liked_videos";
 
 type Reel = {
-  id: string;
-  autor: string;
-  autor_id: string;
-  titulo: string;
-  descripcion: string;
-  video_url: string;
-  likes: number;
-  creado_en: string;
+  id: string; autor: string; autor_id: string;
+  titulo: string; descripcion: string; video_url: string;
+  likes: number; creado_en: string;
 };
+type RecetaItem = { id: string; nombre: string; descripcion?: string };
 
 function timeAgo(d: string) {
   const m = Math.floor((Date.now() - new Date(d).getTime()) / 60000);
@@ -33,23 +29,34 @@ function timeAgo(d: string) {
   return `${Math.floor(h / 24)}d`;
 }
 
-// ─── Reproductor de vídeo ─────────────────────────────────────────────────────
-function VideoPlayer({ url, active, muted, onToggleMute, onPress }: {
-  url: string; active: boolean; muted: boolean;
-  onToggleMute: () => void; onPress: () => void;
+// ─── Reproductor ──────────────────────────────────────────────────────────────
+function VideoPlayer({ url, active, muted, onToggleMute }: {
+  url: string; active: boolean; muted: boolean; onToggleMute: () => void;
 }) {
   const ref = useRef<any>(null);
 
+  // Play / pause según si el reel está activo
   useEffect(() => {
     if (Platform.OS !== "web" || !ref.current) return;
-    if (active) ref.current.play?.().catch(() => {});
-    else { ref.current.pause?.(); ref.current.currentTime = 0; }
+    if (active) {
+      ref.current.play?.().catch(() => {});
+    } else {
+      ref.current.pause?.();
+      ref.current.currentTime = 0;
+    }
   }, [active]);
 
+  // Mute / unmute sin recargar el vídeo
   useEffect(() => {
     if (Platform.OS !== "web" || !ref.current) return;
     ref.current.muted = muted;
   }, [muted]);
+
+  const goFullscreen = () => {
+    const v = ref.current;
+    if (!v) return;
+    (v.requestFullscreen ?? v.webkitRequestFullscreen ?? v.webkitEnterFullscreen)?.call(v);
+  };
 
   if (Platform.OS === "web") {
     return (
@@ -57,141 +64,198 @@ function VideoPlayer({ url, active, muted, onToggleMute, onPress }: {
         {(React.createElement as any)("video", {
           ref,
           src: url,
-          style: { width: "100%", height: "100%", objectFit: "cover", display: "block" },
-          muted: true,
+          // preload inteligente: el activo carga todo, el resto solo metadatos
+          preload: active ? "auto" : "metadata",
+          style: {
+            width: "100%", height: "100%",
+            objectFit: "contain",   // máxima resolución sin recorte
+            display: "block",
+            backgroundColor: "#000",
+          },
+          muted: true,   // el atributo inicial; se controla por ref
           loop: true,
           playsInline: true,
-          onClick: onPress,
         })}
-        <TouchableOpacity style={s.muteBtn} onPress={onToggleMute}>
-          <Text style={{ fontSize: 18 }}>{muted ? "🔇" : "🔊"}</Text>
-        </TouchableOpacity>
+        {/* Controles superpuestos */}
+        <View style={vid.controls} pointerEvents="box-none">
+          <TouchableOpacity style={vid.btn} onPress={onToggleMute}>
+            <Text style={vid.btnTxt}>{muted ? "🔇" : "🔊"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={vid.btn} onPress={goFullscreen}>
+            <Text style={vid.btnTxt}>⛶</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
+
   return (
-    <TouchableOpacity
-      style={{ flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center" }}
-      activeOpacity={1} onPress={onPress}
-    >
+    <View style={{ flex: 1, backgroundColor: "#000", justifyContent: "center", alignItems: "center" }}>
       <Text style={{ fontSize: 52 }}>🎬</Text>
       <Text style={{ color: "#aaa", fontSize: 13, marginTop: 10, textAlign: "center", paddingHorizontal: 32 }}>
-        Abre en la app nativa para reproducir vídeos
+        Reproducción disponible en la web
       </Text>
-    </TouchableOpacity>
+    </View>
   );
 }
+
+const vid = StyleSheet.create({
+  controls: { position: "absolute", top: 52, right: 10, gap: 8 },
+  btn: { backgroundColor: "rgba(0,0,0,0.55)", borderRadius: 22, width: 40, height: 40, justifyContent: "center", alignItems: "center" },
+  btnTxt: { fontSize: 17 },
+});
 
 // ─── Tarjeta de reel (pantalla completa) ──────────────────────────────────────
 function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, onFollow, esMio, onDelete }: {
   reel: Reel; active: boolean; muted: boolean; onToggleMute: () => void;
-  liked: boolean; onLike: () => void;
-  seguido: boolean; onFollow: () => void;
+  liked: boolean; onLike: () => void; seguido: boolean; onFollow: () => void;
   esMio: boolean; onDelete: () => void;
 }) {
   const [showDesc, setShowDesc] = useState(false);
+
   return (
     <View style={{ width: SW, height: SH, backgroundColor: "#000" }}>
-      <VideoPlayer
-        url={reel.video_url} active={active} muted={muted}
-        onToggleMute={onToggleMute} onPress={() => setShowDesc(v => !v)}
-      />
-      {/* Gradiente inferior */}
-      <View style={s.gradient} pointerEvents="none" />
+      <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowDesc(v => !v)}>
+        <VideoPlayer url={reel.video_url} active={active} muted={muted} onToggleMute={onToggleMute} />
+      </TouchableOpacity>
 
-      {/* Info inferior izquierda */}
-      <View style={s.bottomInfo} pointerEvents="none">
-        <Text style={s.autor}>@{reel.autor}</Text>
-        <Text style={s.titulo}>{reel.titulo}</Text>
+      {/* Sombra inferior */}
+      <View style={r.shadow} pointerEvents="none" />
+
+      {/* Info izquierda abajo */}
+      <View style={r.info} pointerEvents="none">
+        <Text style={r.autor}>@{reel.autor}</Text>
+        <Text style={r.titulo}>🍽 {reel.titulo}</Text>
         {showDesc && reel.descripcion ? (
-          <Text style={s.desc}>{reel.descripcion}</Text>
+          <Text style={r.desc}>{reel.descripcion}</Text>
+        ) : reel.descripcion ? (
+          <Text style={r.hint}>Toca para ver descripción</Text>
         ) : null}
-        <Text style={s.time}>{timeAgo(reel.creado_en)}</Text>
+        <Text style={r.time}>{timeAgo(reel.creado_en)}</Text>
       </View>
 
       {/* Acciones derecha */}
-      <View style={s.actions}>
+      <View style={r.actions}>
         {esMio ? (
-          <TouchableOpacity style={s.actionBtn} onPress={onDelete}>
-            <Text style={s.actionIcon}>🗑️</Text>
-            <Text style={s.actionLabel}>Borrar</Text>
+          <TouchableOpacity style={r.actionBtn} onPress={onDelete}>
+            <Text style={r.actionIcon}>🗑️</Text>
+            <Text style={r.actionLbl}>Borrar</Text>
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity style={s.actionBtn} onPress={onFollow}>
-            <View style={[s.followCircle, seguido && s.followCircleActive]}>
-              <Text style={{ fontSize: 18 }}>{seguido ? "✓" : "+"}</Text>
+          <TouchableOpacity style={r.actionBtn} onPress={onFollow}>
+            <View style={[r.circle, seguido && r.circleActive]}>
+              <Text style={{ fontSize: 20, color: "#fff" }}>{seguido ? "✓" : "+"}</Text>
             </View>
-            <Text style={s.actionLabel}>{seguido ? "Siguiendo" : "Seguir"}</Text>
+            <Text style={r.actionLbl}>{seguido ? "Siguiendo" : "Seguir"}</Text>
           </TouchableOpacity>
         )}
-        <TouchableOpacity style={s.actionBtn} onPress={onLike}>
-          <Text style={s.actionIcon}>{liked ? "❤️" : "🤍"}</Text>
-          <Text style={s.actionLabel}>{reel.likes + (liked ? 1 : 0)}</Text>
+        <TouchableOpacity style={r.actionBtn} onPress={onLike}>
+          <Text style={r.actionIcon}>{liked ? "❤️" : "🤍"}</Text>
+          <Text style={r.actionLbl}>{reel.likes + (liked ? 1 : 0)}</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-// ─── Modal subir vídeo ────────────────────────────────────────────────────────
-function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId }: {
+const r = StyleSheet.create({
+  shadow: { position: "absolute", bottom: 0, left: 0, right: 0, height: 280, background: "linear-gradient(transparent,rgba(0,0,0,0.85))" as any },
+  info: { position: "absolute", bottom: 30, left: 14, right: 80, gap: 5 },
+  autor: { color: "#fff", fontWeight: "800", fontSize: 15, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
+  titulo: { color: "#fff", fontWeight: "700", fontSize: 14, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
+  desc: { color: "rgba(255,255,255,0.85)", fontSize: 12, lineHeight: 17 },
+  hint: { color: "rgba(255,255,255,0.4)", fontSize: 11 },
+  time: { color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 2 },
+  actions: { position: "absolute", bottom: 24, right: 12, gap: 20, alignItems: "center" },
+  actionBtn: { alignItems: "center", gap: 3 },
+  actionIcon: { fontSize: 30, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
+  actionLbl: { color: "#fff", fontSize: 11, fontWeight: "700", textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
+  circle: { width: 46, height: 46, borderRadius: 23, backgroundColor: "rgba(255,255,255,0.18)", borderWidth: 2, borderColor: "#fff", justifyContent: "center", alignItems: "center" },
+  circleActive: { backgroundColor: "#1F6FEB", borderColor: "#1F6FEB" },
+});
+
+// ─── Modal subir reel ─────────────────────────────────────────────────────────
+function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaPrevia }: {
   visible: boolean; onClose: () => void; onSubido: () => void;
-  nombreUsuario: string; userId: string;
+  nombreUsuario: string; userId: string; recetaPrevia?: string;
 }) {
   const { colors } = useApp();
-  const [titulo, setTitulo] = useState("");
+  const [step, setStep] = useState<"receta" | "video">("receta");
+  const [recetas, setRecetas] = useState<RecetaItem[]>([]);
+  const [recetaElegida, setRecetaElegida] = useState<string>(recetaPrevia ?? "");
+  const [nuevaReceta, setNuevaReceta] = useState("");
+  const [modoNueva, setModoNueva] = useState(false);
   const [descripcion, setDescripcion] = useState("");
-  const [subiendo, setSubiendo] = useState(false);
-  const [progreso, setProgreso] = useState(0);
   const [videoFile, setVideoFile] = useState<any>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [subiendo, setSubiendo] = useState(false);
+  const [progreso, setProgreso] = useState(0);
 
-  const seleccionar = () => {
-    if (Platform.OS !== "web") {
-      Alert.alert("Próximamente", "La subida desde app nativa estará disponible pronto.");
-      return;
-    }
+  // Cargar recetas del usuario cuando abre el modal
+  useEffect(() => {
+    if (!visible || !userId) return;
+    supabase.from("recetas").select("id,nombre,descripcion")
+      .order("creado_en", { ascending: false })
+      .then(({ data }) => setRecetas((data ?? []) as RecetaItem[]));
+    // Si viene con receta previa, pasar directo al paso de vídeo
+    if (recetaPrevia) { setRecetaElegida(recetaPrevia); setStep("video"); }
+    else { setStep("receta"); setRecetaElegida(""); }
+  }, [visible, userId, recetaPrevia]);
+
+  const limpiar = () => {
+    setStep("receta"); setRecetaElegida(""); setNuevaReceta(""); setModoNueva(false);
+    setDescripcion(""); setVideoFile(null); setPreview(null); setSubiendo(false); setProgreso(0);
+  };
+
+  const cerrar = () => { limpiar(); onClose(); };
+
+  const elegirReceta = (nombre: string) => { setRecetaElegida(nombre); setStep("video"); };
+
+  const seleccionarVideo = () => {
+    if (Platform.OS !== "web") { Alert.alert("Próximamente", "Subida desde app nativa disponible pronto."); return; }
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "video/mp4,video/webm,video/quicktime";
+    input.accept = "video/mp4,video/webm,video/quicktime,video/*";
     input.onchange = (e: any) => {
       const file = e.target?.files?.[0];
       if (!file) return;
-      if (file.size > 200 * 1024 * 1024) {
-        Alert.alert("Demasiado grande", "El vídeo debe pesar menos de 200 MB.");
-        return;
-      }
+      if (file.size > 500 * 1024 * 1024) { Alert.alert("Demasiado grande", "Máximo 500 MB."); return; }
+      // Liberar URL anterior si existe
+      if (preview) URL.revokeObjectURL(preview);
       setVideoFile(file);
       setPreview(URL.createObjectURL(file));
     };
     input.click();
   };
 
-  const subir = async () => {
-    if (!videoFile) { Alert.alert("", "Selecciona un vídeo primero."); return; }
-    if (!titulo.trim()) { Alert.alert("", "Escribe un título."); return; }
-    if (!userId) { Alert.alert("Error", "Debes iniciar sesión."); return; }
+  const quitarVideo = () => {
+    if (preview) URL.revokeObjectURL(preview);
+    setVideoFile(null); setPreview(null);
+  };
 
+  const subir = async () => {
+    const titulo = recetaElegida.trim();
+    if (!titulo) { Alert.alert("", "Selecciona o escribe una receta."); return; }
+    if (!videoFile) { Alert.alert("", "Selecciona un vídeo primero."); return; }
+    if (!userId) { Alert.alert("Error", "Debes iniciar sesión."); return; }
     setSubiendo(true); setProgreso(5);
-    const ext = videoFile.name?.split(".").pop() ?? "mp4";
+
+    const ext = (videoFile.name ?? "video.mp4").split(".").pop();
     const path = `${userId}/${Date.now()}.${ext}`;
 
     const { error: upErr } = await supabase.storage
       .from("videos")
       .upload(path, videoFile, { contentType: videoFile.type, upsert: false });
 
-    if (upErr) {
-      setSubiendo(false);
-      Alert.alert("Error al subir", upErr.message);
-      return;
-    }
-    setProgreso(75);
+    if (upErr) { setSubiendo(false); Alert.alert("Error al subir", upErr.message); return; }
+    setProgreso(78);
 
     const { data: { publicUrl } } = supabase.storage.from("videos").getPublicUrl(path);
+
     const { error: dbErr } = await supabase.from("videos_recetas").insert([{
       autor: nombreUsuario || "Anónimo",
       autor_id: userId,
-      titulo: titulo.trim(),
+      titulo,
       descripcion: descripcion.trim(),
       video_url: publicUrl,
       likes: 0,
@@ -199,69 +263,137 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId }: {
 
     setSubiendo(false);
     if (dbErr) { Alert.alert("Error", dbErr.message); return; }
-
     setProgreso(100);
-    Alert.alert("✓ Publicado", "Tu reel ya está visible en la comunidad 🎉");
-    setTitulo(""); setDescripcion(""); setVideoFile(null); setPreview(null);
-    onSubido(); onClose();
+    Alert.alert("✓ Publicado", `Reel de «${titulo}» publicado 🎉`);
+    limpiar(); onSubido(); onClose();
   };
 
   const m = makeSubirStyles(colors);
+  const tituloReceta = recetaElegida || "";
+
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" onRequestClose={cerrar}>
       <SafeAreaView style={m.safe}>
+        {/* Cabecera */}
         <View style={m.header}>
-          <TouchableOpacity onPress={onClose}><Text style={m.close}>✕ Cerrar</Text></TouchableOpacity>
-          <Text style={m.title}>📹 Nuevo Reel</Text>
-          <Text style={m.subtitle}>Comparte tu receta en vídeo corto</Text>
+          <TouchableOpacity onPress={step === "video" && !recetaPrevia ? () => setStep("receta") : cerrar}>
+            <Text style={m.back}>{step === "video" && !recetaPrevia ? "← Receta" : "✕ Cerrar"}</Text>
+          </TouchableOpacity>
+          <Text style={m.title}>
+            {step === "receta" ? "📋 Elige la receta" : `🎬 Vídeo de «${tituloReceta}»`}
+          </Text>
+          <View style={{ width: 60 }} />
         </View>
-        <ScrollView style={m.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-          <TouchableOpacity style={[m.picker, preview && m.pickerFull]} onPress={seleccionar}>
-            {preview
-              ? Platform.OS === "web"
-                ? (React.createElement as any)("video", {
-                    src: preview,
-                    style: { width: "100%", height: 260, objectFit: "cover", borderRadius: 14 },
-                    muted: true, loop: true, autoPlay: true, playsInline: true,
-                  })
-                : <View style={m.placeholder}><Text style={m.pickerIcon}>🎬</Text><Text style={m.pickerText}>Vídeo seleccionado</Text></View>
-              : <View style={m.placeholder}>
-                  <Text style={m.pickerIcon}>📹</Text>
-                  <Text style={m.pickerText}>Toca para seleccionar vídeo</Text>
-                  <Text style={m.pickerHint}>MP4 · WebM · MOV · máx. 200 MB</Text>
+
+        {/* Indicador de pasos */}
+        <View style={m.steps}>
+          <View style={[m.step, m.stepDone]}><Text style={m.stepTxt}>1 Receta</Text></View>
+          <View style={m.stepLine} />
+          <View style={[m.step, step === "video" && m.stepDone]}><Text style={m.stepTxt}>2 Vídeo</Text></View>
+        </View>
+
+        {/* ── PASO 1: elegir receta ── */}
+        {step === "receta" && (
+          <ScrollView style={m.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            {!modoNueva ? (
+              <>
+                {recetas.length === 0 ? (
+                  <View style={m.emptyBox}>
+                    <Text style={m.emptyIcon}>🍳</Text>
+                    <Text style={m.emptyTxt}>No tienes recetas aún</Text>
+                    <Text style={m.emptyHint}>Crea una desde la sección Recetas y vuelve aquí</Text>
+                  </View>
+                ) : (
+                  recetas.map(rec => (
+                    <TouchableOpacity key={rec.id} style={m.recetaCard} onPress={() => elegirReceta(rec.nombre)}>
+                      <Text style={m.recetaNombre}>{rec.nombre}</Text>
+                      {rec.descripcion ? <Text style={m.recetaDesc} numberOfLines={1}>{rec.descripcion}</Text> : null}
+                      <Text style={m.recetaFlecha}>→</Text>
+                    </TouchableOpacity>
+                  ))
+                )}
+                <TouchableOpacity style={m.nuevaBtn} onPress={() => setModoNueva(true)}>
+                  <Text style={m.nuevaBtnTxt}>+ Crear nombre de receta nuevo</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <View style={m.nuevaBox}>
+                <Text style={m.nuevaLabel}>Nombre de la receta</Text>
+                <TextInput
+                  style={m.input} value={nuevaReceta} onChangeText={setNuevaReceta}
+                  placeholder="Ej: Pasta carbonara casera" placeholderTextColor={colors.textMuted}
+                  autoFocus maxLength={80}
+                />
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
+                  <TouchableOpacity style={m.cancelBtn} onPress={() => setModoNueva(false)}>
+                    <Text style={m.cancelTxt}>Cancelar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[m.nextBtn, !nuevaReceta.trim() && m.btnDis]}
+                    onPress={() => nuevaReceta.trim() && elegirReceta(nuevaReceta.trim())}
+                    disabled={!nuevaReceta.trim()}
+                  >
+                    <Text style={m.nextBtnTxt}>Usar este nombre →</Text>
+                  </TouchableOpacity>
                 </View>
-            }
-          </TouchableOpacity>
+              </View>
+            )}
+            <View style={{ height: 60 }} />
+          </ScrollView>
+        )}
 
-          <TextInput
-            style={m.input} value={titulo} onChangeText={setTitulo}
-            placeholder="Título del reel..." placeholderTextColor={colors.textMuted}
-            maxLength={80}
-          />
-          <TextInput
-            style={[m.input, { height: 80 }]} value={descripcion} onChangeText={setDescripcion}
-            placeholder="Descripción opcional (ingredientes, consejos...)"
-            placeholderTextColor={colors.textMuted} multiline numberOfLines={3} maxLength={250}
-          />
+        {/* ── PASO 2: vídeo ── */}
+        {step === "video" && (
+          <ScrollView style={m.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            {/* Preview con botón cambiar */}
+            {preview ? (
+              <View style={m.previewWrap}>
+                {Platform.OS === "web"
+                  ? (React.createElement as any)("video", {
+                      src: preview,
+                      style: { width: "100%", height: 300, objectFit: "contain", borderRadius: 14, backgroundColor: "#000" },
+                      muted: true, loop: true, autoPlay: true, playsInline: true,
+                    })
+                  : null
+                }
+                <TouchableOpacity style={m.changeBtn} onPress={quitarVideo}>
+                  <Text style={m.changeBtnTxt}>✕ Quitar y elegir otro vídeo</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity style={m.picker} onPress={seleccionarVideo}>
+                <Text style={m.pickerIcon}>📹</Text>
+                <Text style={m.pickerTxt}>Toca para seleccionar vídeo</Text>
+                <Text style={m.pickerHint}>MP4 · WebM · MOV · hasta 500 MB</Text>
+              </TouchableOpacity>
+            )}
 
-          {subiendo && (
-            <View style={m.progressWrap}>
-              <View style={[m.progressBar, { width: `${progreso}%` as any }]} />
-              <Text style={m.progressText}>Subiendo {progreso}%...</Text>
-            </View>
-          )}
+            <TextInput
+              style={[m.input, { height: 90, marginTop: 14 }]}
+              value={descripcion} onChangeText={setDescripcion}
+              placeholder="Descripción opcional: ingredientes, pasos, consejos..."
+              placeholderTextColor={colors.textMuted} multiline numberOfLines={4} maxLength={300}
+            />
 
-          <TouchableOpacity
-            style={[m.btn, (!videoFile || subiendo) && m.btnDis]}
-            onPress={subir} disabled={!videoFile || subiendo}
-          >
-            {subiendo
-              ? <ActivityIndicator color="#fff" size="small" />
-              : <Text style={m.btnText}>🎬 Publicar Reel</Text>
-            }
-          </TouchableOpacity>
-          <View style={{ height: 60 }} />
-        </ScrollView>
+            {subiendo && (
+              <View style={m.progWrap}>
+                <View style={[m.progBar, { width: `${progreso}%` as any }]} />
+                <Text style={m.progTxt}>Subiendo {progreso}%…</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[m.publishBtn, (!videoFile || subiendo) && m.btnDis]}
+              onPress={subir} disabled={!videoFile || subiendo}
+            >
+              {subiendo
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Text style={m.publishTxt}>🎬 Publicar Reel</Text>
+              }
+            </TouchableOpacity>
+            <View style={{ height: 60 }} />
+          </ScrollView>
+        )}
       </SafeAreaView>
     </Modal>
   );
@@ -271,7 +403,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId }: {
 export default function ReelsScreen() {
   const router = useRouter();
   const { colors, theme } = useApp();
-  const avatarUri = useAvatar();
+  const params = useLocalSearchParams<{ recetaNombre?: string }>();
   const [tab, setTab] = useState<"parati" | "amigos">("parati");
   const [reels, setReels] = useState<Reel[]>([]);
   const [amigosReels, setAmigosReels] = useState<Reel[]>([]);
@@ -283,7 +415,16 @@ export default function ReelsScreen() {
   const [nombreUsuario, setNombreUsuario] = useState("");
   const [userId, setUserId] = useState("");
   const [modalSubir, setModalSubir] = useState(false);
+  const [recetaPrevia, setRecetaPrevia] = useState<string | undefined>();
   const [confirmarBorrar, setConfirmarBorrar] = useState<Reel | null>(null);
+
+  // Si viene desde recetas.tsx con una receta pre-seleccionada
+  useEffect(() => {
+    if (params.recetaNombre) {
+      setRecetaPrevia(decodeURIComponent(params.recetaNombre));
+      setModalSubir(true);
+    }
+  }, [params.recetaNombre]);
 
   useFocusEffect(useCallback(() => {
     cargarDatos();
@@ -292,14 +433,13 @@ export default function ReelsScreen() {
   const cargarDatos = async () => {
     setCargando(true);
     try {
-      const { data: sesion } = await supabase.auth.getSession();
-      const uid = sesion.session?.user?.id ?? "";
-      if (uid && !userId) setUserId(uid);
+      const { data: ses } = await supabase.auth.getSession();
+      const uid = ses.session?.user?.id ?? "";
+      if (uid) setUserId(uid);
 
       if (uid) {
         const { data: p } = await supabase.from("perfiles").select("nombre").eq("id", uid).single();
         if (p?.nombre) setNombreUsuario(p.nombre);
-
         const { data: segs } = await supabase.from("seguidos").select("followed_id").eq("follower_id", uid);
         setSeguidosIds(new Set((segs ?? []).map((s: any) => s.followed_id)));
       }
@@ -316,30 +456,21 @@ export default function ReelsScreen() {
         if (ids.length > 0) {
           const { data } = await supabase.from("videos_recetas").select("*").in("autor_id", ids).order("creado_en", { ascending: false });
           setAmigosReels((data ?? []).filter((r: any) => r.video_url));
-        } else {
-          setAmigosReels([]);
-        }
+        } else setAmigosReels([]);
       }
-    } finally {
-      setCargando(false);
-    }
+    } finally { setCargando(false); }
   };
 
   const handleLike = async (reel: Reel) => {
     const already = likedIds.has(reel.id);
     const next = new Set(likedIds);
-    if (already) {
-      next.delete(reel.id);
-      await supabase.from("videos_recetas").update({ likes: Math.max(0, reel.likes - 1) }).eq("id", reel.id);
-    } else {
-      next.add(reel.id);
-      await supabase.from("videos_recetas").update({ likes: reel.likes + 1 }).eq("id", reel.id);
-    }
+    const delta = already ? -1 : 1;
+    if (already) next.delete(reel.id); else next.add(reel.id);
     setLikedIds(next);
     await AsyncStorage.setItem(LIKED_KEY, JSON.stringify([...next]));
-    // Update local state so counter reacts instantly
-    const update = (list: Reel[]) => list.map(r => r.id === reel.id ? { ...r, likes: already ? Math.max(0, r.likes - 1) : r.likes + 1 } : r);
-    setReels(update); setAmigosReels(update);
+    await supabase.from("videos_recetas").update({ likes: Math.max(0, reel.likes + delta) }).eq("id", reel.id);
+    const upd = (list: Reel[]) => list.map(r => r.id === reel.id ? { ...r, likes: Math.max(0, r.likes + delta) } : r);
+    setReels(upd); setAmigosReels(upd);
   };
 
   const handleFollow = async (reel: Reel) => {
@@ -350,10 +481,7 @@ export default function ReelsScreen() {
       await supabase.from("seguidos").delete().eq("follower_id", userId).eq("followed_id", reel.autor_id);
       next.delete(reel.autor_id);
     } else {
-      await supabase.from("seguidos").insert([{
-        follower_id: userId, follower_nombre: nombreUsuario,
-        followed_id: reel.autor_id, followed_nombre: reel.autor,
-      }]);
+      await supabase.from("seguidos").insert([{ follower_id: userId, follower_nombre: nombreUsuario, followed_id: reel.autor_id, followed_nombre: reel.autor }]);
       next.add(reel.autor_id);
     }
     setSeguidosIds(next);
@@ -362,8 +490,8 @@ export default function ReelsScreen() {
   const handleDelete = async (reel: Reel) => {
     try {
       const url = new URL(reel.video_url);
-      const parts = url.pathname.split("/videos/");
-      if (parts[1]) await supabase.storage.from("videos").remove([decodeURIComponent(parts[1])]);
+      const part = url.pathname.split("/videos/")[1];
+      if (part) await supabase.storage.from("videos").remove([decodeURIComponent(part)]);
     } catch {}
     await supabase.from("videos_recetas").delete().eq("id", reel.id);
     setConfirmarBorrar(null);
@@ -376,21 +504,21 @@ export default function ReelsScreen() {
     <View style={{ flex: 1, backgroundColor: "#000" }}>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
 
-      {/* Feed */}
+      {/* ── Feed ── */}
       {cargando ? (
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
           <ActivityIndicator color="#fff" size="large" />
         </View>
       ) : lista.length === 0 ? (
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 40 }}>
-          <Text style={{ fontSize: 64, textAlign: "center" }}>{tab === "amigos" ? "👥" : "🎬"}</Text>
+          <Text style={{ fontSize: 64 }}>{tab === "amigos" ? "👥" : "🎬"}</Text>
           <Text style={{ color: "#fff", fontSize: 22, fontWeight: "800", marginTop: 20, textAlign: "center" }}>
             {tab === "amigos" ? "Sigue a alguien primero" : "Sin reels todavía"}
           </Text>
           <Text style={{ color: "#94A3B8", fontSize: 14, marginTop: 10, textAlign: "center", lineHeight: 22 }}>
             {tab === "amigos"
-              ? "Ve a «Para ti», mira los reels de otros y toca el botón ＋ para seguirlos"
-              : "Sé el primero en compartir tu receta en vídeo corto"}
+              ? "Ve a «Para ti», mira reels de otros y toca ＋ para seguirlos"
+              : "Sé el primero en compartir tu receta en vídeo"}
           </Text>
           {tab === "parati" && (
             <TouchableOpacity
@@ -406,8 +534,12 @@ export default function ReelsScreen() {
           style={{ flex: 1 }}
           pagingEnabled
           showsVerticalScrollIndicator={false}
-          onScroll={e => setActiveIdx(Math.round(e.nativeEvent.contentOffset.y / SH))}
-          scrollEventThrottle={16}
+          decelerationRate="fast"
+          onScroll={e => {
+            const idx = Math.round(e.nativeEvent.contentOffset.y / SH);
+            if (idx !== activeIdx) setActiveIdx(idx);
+          }}
+          scrollEventThrottle={100}
         >
           {lista.map((reel, i) => (
             <ReelItem
@@ -427,24 +559,24 @@ export default function ReelsScreen() {
         </ScrollView>
       )}
 
-      {/* Header superpuesto */}
-      <SafeAreaView style={s.headerWrap} pointerEvents="box-none">
-        <View style={s.header} pointerEvents="box-none">
-          <TouchableOpacity onPress={() => router.back()} style={s.headerSide}>
-            <Text style={s.back}>← Volver</Text>
+      {/* ── Header superpuesto ── */}
+      <SafeAreaView style={h.wrap} pointerEvents="box-none">
+        <View style={h.row} pointerEvents="box-none">
+          <TouchableOpacity onPress={() => router.back()} style={{ minWidth: 70 }}>
+            <Text style={h.back}>← Volver</Text>
           </TouchableOpacity>
-          <View style={s.tabs}>
+          <View style={h.tabs}>
             <TouchableOpacity onPress={() => { setTab("parati"); setActiveIdx(0); }}>
-              <Text style={[s.tabTxt, tab === "parati" && s.tabTxtActive]}>Para ti</Text>
+              <Text style={[h.tab, tab === "parati" && h.tabActive]}>Para ti</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => { setTab("amigos"); setActiveIdx(0); }}>
-              <Text style={[s.tabTxt, tab === "amigos" && s.tabTxtActive]}>
+              <Text style={[h.tab, tab === "amigos" && h.tabActive]}>
                 Amigos{seguidosIds.size > 0 ? ` (${seguidosIds.size})` : ""}
               </Text>
             </TouchableOpacity>
           </View>
-          <TouchableOpacity onPress={() => setModalSubir(true)} style={s.headerSide}>
-            <Text style={s.uploadIcon}>＋</Text>
+          <TouchableOpacity onPress={() => { setRecetaPrevia(undefined); setModalSubir(true); }} style={{ minWidth: 70, alignItems: "flex-end" }}>
+            <Text style={h.plus}>＋</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -452,23 +584,24 @@ export default function ReelsScreen() {
       {/* Modal subir */}
       <ModalSubir
         visible={modalSubir}
-        onClose={() => setModalSubir(false)}
+        onClose={() => { setModalSubir(false); setRecetaPrevia(undefined); }}
         onSubido={cargarDatos}
         nombreUsuario={nombreUsuario}
         userId={userId}
+        recetaPrevia={recetaPrevia}
       />
 
       {/* Confirmar borrar */}
       <Modal visible={!!confirmarBorrar} transparent animationType="fade" onRequestClose={() => setConfirmarBorrar(null)}>
-        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setConfirmarBorrar(null)}>
-          <TouchableOpacity activeOpacity={1} style={s.popup}>
-            <Text style={s.popupTitle}>🗑️ Eliminar reel</Text>
-            <Text style={s.popupSub}>¿Eliminar «{confirmarBorrar?.titulo}»? No se puede deshacer.</Text>
-            <View style={s.popupBtns}>
-              <TouchableOpacity style={s.popupCancel} onPress={() => setConfirmarBorrar(null)}>
+        <TouchableOpacity style={p.overlay} activeOpacity={1} onPress={() => setConfirmarBorrar(null)}>
+          <TouchableOpacity activeOpacity={1} style={p.box}>
+            <Text style={p.title}>🗑️ Eliminar reel</Text>
+            <Text style={p.sub}>¿Eliminar «{confirmarBorrar?.titulo}»? No se puede deshacer.</Text>
+            <View style={p.btns}>
+              <TouchableOpacity style={p.cancel} onPress={() => setConfirmarBorrar(null)}>
                 <Text style={{ color: "#94A3B8", fontWeight: "700" }}>Cancelar</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.popupDelete} onPress={() => confirmarBorrar && handleDelete(confirmarBorrar)}>
+              <TouchableOpacity style={p.del} onPress={() => confirmarBorrar && handleDelete(confirmarBorrar)}>
                 <Text style={{ color: "#fff", fontWeight: "700" }}>Eliminar</Text>
               </TouchableOpacity>
             </View>
@@ -479,60 +612,71 @@ export default function ReelsScreen() {
   );
 }
 
-// ─── Estilos ──────────────────────────────────────────────────────────────────
-const s = StyleSheet.create({
-  headerWrap: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 20 },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingTop: 8, paddingBottom: 6 },
-  headerSide: { minWidth: 60 },
-  back: { color: "#fff", fontSize: 14, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
-  tabs: { flexDirection: "row", gap: 24, alignItems: "center" },
-  tabTxt: { color: "rgba(255,255,255,0.55)", fontSize: 16, fontWeight: "700", paddingBottom: 2, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
-  tabTxtActive: { color: "#fff", borderBottomWidth: 2, borderBottomColor: "#fff" },
-  uploadIcon: { color: "#fff", fontSize: 24, fontWeight: "300", textAlign: "right", textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
-  gradient: { position: "absolute", bottom: 0, left: 0, right: 0, height: 260, backgroundColor: "transparent",
-    // gradient simulado con múltiples capas
-  },
-  bottomInfo: { position: "absolute", bottom: 32, left: 16, right: 80, gap: 4 },
-  autor: { color: "#fff", fontWeight: "800", fontSize: 15, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
-  titulo: { color: "#fff", fontSize: 14, fontWeight: "600", textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
-  desc: { color: "rgba(255,255,255,0.85)", fontSize: 12, lineHeight: 17, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
-  time: { color: "rgba(255,255,255,0.5)", fontSize: 11, marginTop: 2 },
-  actions: { position: "absolute", bottom: 28, right: 14, gap: 22, alignItems: "center" },
-  actionBtn: { alignItems: "center", gap: 3 },
-  actionIcon: { fontSize: 30, textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
-  actionLabel: { color: "#fff", fontSize: 11, fontWeight: "700", textShadowColor: "#000", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
-  followCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: "rgba(255,255,255,0.2)", borderWidth: 2, borderColor: "#fff", justifyContent: "center", alignItems: "center" },
-  followCircleActive: { backgroundColor: "#1F6FEB", borderColor: "#1F6FEB" },
-  muteBtn: { position: "absolute", top: 56, right: 12, backgroundColor: "rgba(0,0,0,0.55)", borderRadius: 22, width: 40, height: 40, justifyContent: "center", alignItems: "center" },
-  overlay: { flex: 1, backgroundColor: "#000000BB", justifyContent: "center", alignItems: "center", padding: 24 },
-  popup: { backgroundColor: "#1E2533", borderRadius: 20, padding: 24, width: "100%", maxWidth: 360 },
-  popupTitle: { color: "#fff", fontSize: 18, fontWeight: "800", marginBottom: 8 },
-  popupSub: { color: "#94A3B8", fontSize: 14, lineHeight: 20, marginBottom: 20 },
-  popupBtns: { flexDirection: "row", gap: 12 },
-  popupCancel: { flex: 1, backgroundColor: "#2D3748", borderRadius: 12, padding: 14, alignItems: "center" },
-  popupDelete: { flex: 1, backgroundColor: "#EF4444", borderRadius: 12, padding: 14, alignItems: "center" },
+// ─── Estilos header ───────────────────────────────────────────────────────────
+const shadow = { textShadowColor: "#000" as const, textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 };
+const h = StyleSheet.create({
+  wrap: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 20 },
+  row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingTop: 8, paddingBottom: 6 },
+  back: { color: "#fff", fontSize: 14, ...shadow },
+  tabs: { flexDirection: "row", gap: 22 },
+  tab: { color: "rgba(255,255,255,0.5)", fontSize: 16, fontWeight: "700", paddingBottom: 2, ...shadow },
+  tabActive: { color: "#fff", borderBottomWidth: 2, borderBottomColor: "#fff" },
+  plus: { color: "#fff", fontSize: 26, fontWeight: "300", ...shadow },
 });
 
+// ─── Estilos popup borrar ─────────────────────────────────────────────────────
+const p = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: "#000000BB", justifyContent: "center", alignItems: "center", padding: 24 },
+  box: { backgroundColor: "#1E2533", borderRadius: 20, padding: 24, width: "100%", maxWidth: 360 },
+  title: { color: "#fff", fontSize: 18, fontWeight: "800", marginBottom: 8 },
+  sub: { color: "#94A3B8", fontSize: 14, lineHeight: 20, marginBottom: 20 },
+  btns: { flexDirection: "row", gap: 12 },
+  cancel: { flex: 1, backgroundColor: "#2D3748", borderRadius: 12, padding: 14, alignItems: "center" },
+  del: { flex: 1, backgroundColor: "#EF4444", borderRadius: 12, padding: 14, alignItems: "center" },
+});
+
+// ─── Estilos modal subir ──────────────────────────────────────────────────────
 function makeSubirStyles(colors: any) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: colors.bg },
-    header: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12, gap: 4 },
-    close: { color: "#58A6FF", fontSize: 14 },
-    title: { color: colors.text, fontSize: 24, fontWeight: "900" },
-    subtitle: { color: colors.textMuted, fontSize: 13 },
+    header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingTop: 14, paddingBottom: 4 },
+    back: { color: "#58A6FF", fontSize: 14, minWidth: 80 },
+    title: { color: colors.text, fontSize: 16, fontWeight: "800", textAlign: "center", flex: 1 },
+    steps: { flexDirection: "row", alignItems: "center", paddingHorizontal: 32, paddingVertical: 12, gap: 0 },
+    step: { flex: 1, paddingVertical: 6, borderRadius: 8, alignItems: "center", backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder },
+    stepDone: { backgroundColor: "#1F6FEB22", borderColor: "#1F6FEB" },
+    stepLine: { width: 20, height: 2, backgroundColor: colors.cardBorder },
+    stepTxt: { color: colors.text, fontSize: 12, fontWeight: "700" },
     scroll: { flex: 1, paddingHorizontal: 16 },
-    picker: { borderWidth: 2, borderColor: colors.cardBorder, borderStyle: "dashed" as const, borderRadius: 16, marginBottom: 16, overflow: "hidden", backgroundColor: colors.card },
-    pickerFull: { borderStyle: "solid" as const, borderColor: "#1F6FEB" },
-    placeholder: { height: 200, justifyContent: "center", alignItems: "center", gap: 10 },
+    recetaCard: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder, borderRadius: 14, padding: 16, marginBottom: 10, flexDirection: "row", alignItems: "center" },
+    recetaNombre: { color: colors.text, fontSize: 16, fontWeight: "700", flex: 1 },
+    recetaDesc: { color: colors.textMuted, fontSize: 12, flex: 1 },
+    recetaFlecha: { color: "#58A6FF", fontSize: 18, fontWeight: "700" },
+    nuevaBtn: { borderWidth: 2, borderColor: "#1F6FEB55", borderStyle: "dashed" as const, borderRadius: 14, padding: 16, alignItems: "center", marginTop: 4 },
+    nuevaBtnTxt: { color: "#58A6FF", fontWeight: "700", fontSize: 14 },
+    nuevaBox: { backgroundColor: colors.card, borderRadius: 14, padding: 16, marginTop: 8 },
+    nuevaLabel: { color: colors.text, fontWeight: "700", marginBottom: 8 },
+    emptyBox: { alignItems: "center", paddingVertical: 40, gap: 8 },
+    emptyIcon: { fontSize: 52 },
+    emptyTxt: { color: colors.text, fontSize: 18, fontWeight: "700" },
+    emptyHint: { color: colors.textMuted, fontSize: 13, textAlign: "center" },
+    picker: { backgroundColor: colors.card, borderWidth: 2, borderColor: colors.cardBorder, borderStyle: "dashed" as const, borderRadius: 16, height: 200, justifyContent: "center", alignItems: "center", gap: 10 },
     pickerIcon: { fontSize: 52 },
-    pickerText: { color: colors.text, fontSize: 16, fontWeight: "700" },
+    pickerTxt: { color: colors.text, fontSize: 16, fontWeight: "700" },
     pickerHint: { color: colors.textMuted, fontSize: 12 },
-    input: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder, borderRadius: 12, padding: 14, color: colors.text, fontSize: 15, marginBottom: 12 },
-    progressWrap: { backgroundColor: colors.card, borderRadius: 8, overflow: "hidden", height: 8, marginBottom: 8 },
-    progressBar: { height: 8, backgroundColor: "#1F6FEB", borderRadius: 8 },
-    progressText: { color: colors.textMuted, fontSize: 11, textAlign: "center", marginBottom: 12 },
-    btn: { backgroundColor: "#1F6FEB", borderRadius: 14, padding: 16, alignItems: "center", marginTop: 8 },
-    btnDis: { opacity: 0.45 },
-    btnText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+    previewWrap: { borderRadius: 14, overflow: "hidden", backgroundColor: "#000", marginBottom: 4 },
+    changeBtn: { backgroundColor: "#EF444422", borderWidth: 1, borderColor: "#EF4444", borderRadius: 10, padding: 12, alignItems: "center", margin: 10 },
+    changeBtnTxt: { color: "#EF4444", fontWeight: "700", fontSize: 13 },
+    input: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder, borderRadius: 12, padding: 14, color: colors.text, fontSize: 15 },
+    progWrap: { backgroundColor: colors.card, borderRadius: 8, overflow: "hidden", height: 8, marginVertical: 12 },
+    progBar: { height: 8, backgroundColor: "#1F6FEB", borderRadius: 8 },
+    progTxt: { color: colors.textMuted, fontSize: 11, textAlign: "center", marginBottom: 4 },
+    publishBtn: { backgroundColor: "#1F6FEB", borderRadius: 14, padding: 16, alignItems: "center", marginTop: 14 },
+    publishTxt: { color: "#fff", fontSize: 16, fontWeight: "800" },
+    cancelBtn: { flex: 1, backgroundColor: colors.card, borderRadius: 10, padding: 12, alignItems: "center" },
+    cancelTxt: { color: colors.textMuted, fontWeight: "700" },
+    nextBtn: { flex: 2, backgroundColor: "#1F6FEB", borderRadius: 10, padding: 12, alignItems: "center" },
+    nextBtnTxt: { color: "#fff", fontWeight: "700" },
+    btnDis: { opacity: 0.4 },
   });
 }
