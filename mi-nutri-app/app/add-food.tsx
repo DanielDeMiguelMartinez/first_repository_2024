@@ -319,7 +319,9 @@ export default function AddFoodScreen() {
   const cacheRef = useRef<Record<string, Producto[]>>({});
   const currentSearch = useRef("");
   // Keeps the SpeechRecognition instance alive — Chrome Android GC's local vars before events fire
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef   = useRef<any>(null);
+  // MediaRecorder para el fallback Firefox
+  const mediaRecorderRef = useRef<any>(null);
 
   useEffect(() => { cargarDatos(); }, []);
   useEffect(() => {
@@ -439,15 +441,78 @@ export default function AddFoodScreen() {
       // ── Detección de soporte ──────────────────────────────────────────────
       const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SR) {
-        const ua = navigator.userAgent;
-        const isFF  = ua.includes("Firefox");
-        const isSaf = /^((?!Chrome|Android).)*Safari/i.test(ua);
-        Alert.alert(
-          "🎤 Voz no disponible",
-          isFF  ? "Firefox no soporta reconocimiento de voz.\nUsa Chrome, Edge o Safari." :
-          isSaf ? "Activa el reconocimiento de voz en:\niOS → Ajustes → Safari → Siri y Búsqueda." :
-                  "Tu navegador no soporta voz. Prueba Chrome o Edge."
-        );
+        // Fallback para Firefox u otros sin Web Speech API:
+        // Grabamos con MediaRecorder y transcribimos vía Whisper en el servidor.
+        if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+          Alert.alert("🎤 Voz no disponible", "Tu navegador no soporta micrófono. Prueba Chrome, Edge o Safari.");
+          return;
+        }
+
+        // Si ya estaba grabando, parar
+        if (escuchando) {
+          try { mediaRecorderRef.current?.stop(); } catch {}
+          return;
+        }
+
+        setEscuchando(true);
+        navigator.mediaDevices.getUserMedia({ audio: true })
+          .then(stream => {
+            const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+              ? "audio/webm;codecs=opus"
+              : MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
+              ? "audio/ogg;codecs=opus"
+              : "";
+            const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+            mediaRecorderRef.current = recorder;
+            const chunks: BlobPart[] = [];
+
+            recorder.ondataavailable = (e: any) => { if (e.data.size > 0) chunks.push(e.data); };
+            recorder.onstop = async () => {
+              stream.getTracks().forEach((t: any) => t.stop());
+              mediaRecorderRef.current = null;
+              const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+              // Convertir a base64 data URL
+              const base64: string = await new Promise(resolve => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result as string);
+                reader.readAsDataURL(blob);
+              });
+              try {
+                const res = await fetch("/api/transcribe", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ audio: base64, lang: navigator.language }),
+                });
+                const json = await res.json();
+                if (json.text) {
+                  buscarConDebounce(json.text);
+                } else if (json.error === "not-configured") {
+                  Alert.alert("🎤 Voz no configurada", "El servidor no tiene clave de transcripción. Usa Chrome o Edge para la búsqueda por voz.");
+                } else if (json.error) {
+                  Alert.alert("Error de voz", "No se pudo transcribir el audio. Inténtalo de nuevo.");
+                }
+              } catch {
+                Alert.alert("Error de voz", "Sin conexión. Comprueba tu red e inténtalo de nuevo.");
+              } finally {
+                setEscuchando(false);
+              }
+            };
+
+            recorder.start(200); // chunks cada 200ms para data rápida
+            // Auto-detener tras 10 segundos
+            setTimeout(() => {
+              if (recorder.state !== "inactive") recorder.stop();
+            }, 10000);
+          })
+          .catch((e: any) => {
+            setEscuchando(false);
+            mediaRecorderRef.current = null;
+            if (e?.name === "NotAllowedError" || e?.name === "PermissionDeniedError") {
+              Alert.alert("🎤 Micrófono bloqueado", "Permite el acceso al micrófono en la barra de tu navegador.");
+            } else {
+              Alert.alert("Error", "No se pudo acceder al micrófono.");
+            }
+          });
         return;
       }
 
@@ -472,12 +537,21 @@ export default function AddFoodScreen() {
         recognitionRef.current = recognition;   // ← CRÍTICO: evita el GC en Chrome Android
 
         // Normalizar código de idioma: iOS Safari necesita "es-ES" no "es"
+        // Si ya viene con región ("es-MX", "pt-BR"…) se usa directamente.
+        // Solo se expande si es un código corto de 2 letras.
         const rawLang = navigator.language || "es-ES";
         const fullLangMap: Record<string, string> = {
           es: "es-ES", en: "en-US", fr: "fr-FR", de: "de-DE",
-          zh: "zh-CN", pt: "pt-PT", it: "it-IT", ja: "ja-JP",
+          zh: "zh-CN", pt: "pt-BR", it: "it-IT", ja: "ja-JP",
+          ko: "ko-KR", ar: "ar-SA", ru: "ru-RU", nl: "nl-NL",
+          pl: "pl-PL", sv: "sv-SE", nb: "nb-NO", da: "da-DK",
+          fi: "fi-FI", tr: "tr-TR", he: "he-IL", hi: "hi-IN",
+          id: "id-ID", ms: "ms-MY", th: "th-TH", vi: "vi-VN",
+          cs: "cs-CZ", sk: "sk-SK", ro: "ro-RO", hu: "hu-HU",
+          uk: "uk-UA", ca: "ca-ES", hr: "hr-HR", bg: "bg-BG",
         };
-        recognition.lang = fullLangMap[rawLang] ?? rawLang;
+        // Si rawLang ya tiene región (longitud > 2), usarlo tal cual
+        recognition.lang = rawLang.length > 2 ? rawLang : (fullLangMap[rawLang] ?? `${rawLang}-${rawLang.toUpperCase()}`);
         recognition.interimResults = false;
         recognition.continuous     = false;
         recognition.maxAlternatives = 3;
@@ -586,7 +660,12 @@ export default function AddFoodScreen() {
           return;
         }
         setEscuchando(true);
-        ExpoSpeechRecognitionModule.start({ lang: "es-ES", interimResults: false, continuous: false });
+        // Usar el idioma real del dispositivo (funciona en Hermes + JSCore)
+        const deviceLang = (() => {
+          try { return new Intl.DateTimeFormat().resolvedOptions().locale || "es-ES"; }
+          catch { return "es-ES"; }
+        })();
+        ExpoSpeechRecognitionModule.start({ lang: deviceLang, interimResults: false, continuous: false });
         const unsubResult = ExpoSpeechRecognitionModule.addListener("result", (event: any) => {
           const texto = event.results?.[0]?.transcript ?? "";
           if (texto.trim()) buscarConDebounce(texto.trim());
@@ -861,7 +940,7 @@ export default function AddFoodScreen() {
             <View style={s.cantidadWrap}>
               <View style={s.gramosRow}>
                 <Text style={s.gramosLabel}>Cantidad (g)</Text>
-                <TextInput style={s.gramosInput} value={gramos} onChangeText={(v) => { setGramos(v); setGuardado(false); }} keyboardType="numeric" selectTextOnFocus />
+                <TextInput style={s.gramosInput} value={gramos} onChangeText={(v) => { setGramos(v.replace(",", ".")); setGuardado(false); }} keyboardType="decimal-pad" selectTextOnFocus />
               </View>
               {producto.pesoEnvase && !mostrarEnvaseManual && (
                 <View style={s.envaseAutoWrap}>

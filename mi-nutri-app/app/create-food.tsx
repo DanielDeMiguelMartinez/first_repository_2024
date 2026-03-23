@@ -78,7 +78,8 @@ export default function CreateFoodScreen() {
     if (params.scannedCode) setCodigoBarras(params.scannedCode);
   }, [params.scannedCode]);
 
-  const set = (key: string, val: string) => setForm((f) => ({ ...f, [key]: val }));
+  // Normaliza separador decimal: acepta tanto "," como "." (útil en teclados europeos)
+  const set = (key: string, val: string) => setForm((f) => ({ ...f, [key]: val.replace(",", ".") }));
   const seleccionarSuper = (s: string) => { setSuperSeleccionado(s); setMostrarSupers(false); };
 
   const agregarPorcion = () => setPorciones((prev) => [...prev, { nombre: "", gramos: "" }]);

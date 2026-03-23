@@ -756,7 +756,24 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
               </View>
             )}
 
-            <TouchableOpacity style={[m.publishBtn, subiendo && m.btnDis]} onPress={subir} disabled={subiendo}>
+            {/* Estado de publicación */}
+            <View style={{ backgroundColor: "#0F172A", borderRadius: 12, padding: 12, marginBottom: 14, gap: 4 }}>
+              <Text style={{ color: "#94A3B8", fontSize: 11, fontWeight: "700", marginBottom: 2 }}>ESTADO</Text>
+              <Text style={{ color: videoFile ? "#4ADE80" : "#EF4444", fontSize: 12 }}>
+                {videoFile ? `✓ Vídeo: ${videoFile.name ?? "video"} ${videoFile.size ? `(${(videoFile.size / 1024 / 1024).toFixed(1)} MB)` : ""}` : "✗ Sin vídeo — elige uno primero"}
+              </Text>
+              <Text style={{ color: recetaElegida ? "#4ADE80" : "#EF4444", fontSize: 12 }}>
+                {recetaElegida ? `✓ Receta: ${recetaElegida}` : "✗ Sin receta elegida"}
+              </Text>
+              <Text style={{ color: userId ? "#4ADE80" : "#EF4444", fontSize: 12 }}>
+                {userId ? "✓ Sesión activa" : "✗ No hay sesión — cierra y vuelve a abrir"}
+              </Text>
+              <Text style={{ color: "#FBBF24", fontSize: 11, marginTop: 4 }}>
+                ⚠️ Necesitas el bucket "videos" en Supabase Storage → Public
+              </Text>
+            </View>
+
+            <TouchableOpacity style={[m.publishBtn, (subiendo || !videoFile || !userId) && m.btnDis]} onPress={subir} disabled={subiendo || !videoFile || !userId}>
               {subiendo ? <ActivityIndicator color="#fff" size="small" /> : <Text style={m.publishTxt}>🎬 Publicar Reel</Text>}
             </TouchableOpacity>
             <View style={{ height: 60 }} />
