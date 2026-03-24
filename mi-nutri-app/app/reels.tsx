@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-const { width: SW, height: SH } = Dimensions.get("window");
+const { width: SW } = Dimensions.get("window");
 const LIKED_KEY          = "nutri_liked_videos";
 const LIKED_HASHTAGS_KEY = "nutri_liked_hashtags";
 
@@ -310,6 +310,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
   // ── Paso 3: Detalles ──────────────────────────────────────────────────────
   const [videoFile, setVideoFile] = useState<any>(null);
   const [webPreview, setWebPreview] = useState<string | null>(null);
+  const [flipH, setFlipH] = useState(false);          // voltear horizontalmente (cámara frontal)
   const [descripcion, setDescripcion] = useState("");
   const [hashtagsInput, setHashtagsInput] = useState("");
   const [subiendo, setSubiendo] = useState(false);
@@ -341,7 +342,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
     if (durTimerRef.current) clearInterval(durTimerRef.current);
     setVideoFile(null);
     if (webPreview) URL.revokeObjectURL(webPreview);
-    setWebPreview(null);
+    setWebPreview(null); setFlipH(false);
     setDescripcion(""); setHashtagsInput(""); setSubiendo(false); setProgreso(0);
   };
 
@@ -372,6 +373,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
       if (video?.uri) {
         const ext = (video.uri.split("/").pop()?.split(".").pop() ?? "mp4").split("?")[0].toLowerCase();
         setVideoFile({ uri: video.uri, type: `video/${ext}`, name: `reel.${ext}`, isNative: true, isFront: facing === "front" });
+        setFlipH(facing === "front");
         setStep("detalles");
       }
     } catch {
@@ -457,10 +459,10 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
       setProgreso(80);
 
       const { data: { publicUrl } } = supabase.storage.from("videos").getPublicUrl(path);
-      const isFront = videoFile.isFront ?? false;
+      // flipH = true cuando es cámara frontal (detectado auto o elegido por el usuario)
       const hashtags = [
         ...(hashtagsInput.match(/#[\w\u00C0-\u024F\u0400-\u04FF]+/g) ?? []).map(h => h.toLowerCase().slice(1)),
-        ...(isFront ? ["__cf__"] : []),  // flag de cámara frontal sin necesitar columna DB
+        ...(flipH ? ["__cf__"] : []),  // flag de cámara frontal — siempre en hashtags sin necesitar columna DB
       ];
 
       const base = {
@@ -472,10 +474,10 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
       // Intentar con columnas nuevas; si el schema no las tiene, reintentar sin ellas
       let dbErr: any;
       ({ error: dbErr } = await supabase.from("videos_recetas").insert([
-        { ...base, views: 0, hashtags, filtro: selectedFilter !== "Normal" ? selectedFilter : null, camara_frontal: isFront },
+        { ...base, views: 0, hashtags, filtro: selectedFilter !== "Normal" ? selectedFilter : null, camara_frontal: flipH },
       ]));
       if (dbErr?.code === "42703" || dbErr?.message?.includes("column")) {
-        ({ error: dbErr } = await supabase.from("videos_recetas").insert([{ ...base, views: 0, hashtags, camara_frontal: isFront }]));
+        ({ error: dbErr } = await supabase.from("videos_recetas").insert([{ ...base, views: 0, hashtags, camara_frontal: flipH }]));
       }
       if (dbErr?.code === "42703" || dbErr?.message?.includes("column")) {
         ({ error: dbErr } = await supabase.from("videos_recetas").insert([{ ...base, views: 0, hashtags }]));
@@ -601,30 +603,45 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
                   </React.Fragment>
                 ))}
               </View>
-              <View style={{ flex: 1, justifyContent: "center", padding: 24, gap: 16 }}>
-                {/* Botón cámara — abre la cámara nativa del móvil directamente */}
+              <View style={{ flex: 1, justifyContent: "center", padding: 24, gap: 12 }}>
+                {/* Cámara trasera */}
                 <TouchableOpacity
-                  style={{ backgroundColor: "#1F6FEB", borderRadius: 20, padding: 24, alignItems: "center", gap: 8 }}
+                  style={{ backgroundColor: "#1F6FEB", borderRadius: 20, padding: 20, alignItems: "center", gap: 6 }}
                   onPress={() => {
                     const input = document.createElement("input");
-                    input.type = "file";
-                    input.accept = "video/*";
+                    input.type = "file"; input.accept = "video/*";
                     input.setAttribute("capture", "environment");
                     input.onchange = (e: any) => {
                       const file = e.target?.files?.[0];
                       if (!file) return;
                       if (webPreview) URL.revokeObjectURL(webPreview);
-                      setVideoFile(file);
-                      setWebPreview(URL.createObjectURL(file));
-                      setStep("detalles");
+                      setVideoFile(file); setWebPreview(URL.createObjectURL(file));
+                      setFlipH(false); setStep("detalles");
                     };
                     input.click();
                   }}>
-                  <Text style={{ fontSize: 48 }}>📹</Text>
-                  <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800" }}>Grabar con cámara</Text>
-                  <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, textAlign: "center" }}>
-                    Abre la cámara del móvil directamente
-                  </Text>
+                  <Text style={{ fontSize: 40 }}>📹</Text>
+                  <Text style={{ color: "#fff", fontSize: 16, fontWeight: "800" }}>Cámara trasera</Text>
+                </TouchableOpacity>
+
+                {/* Cámara frontal (selfie) */}
+                <TouchableOpacity
+                  style={{ backgroundColor: "#7C3AED", borderRadius: 20, padding: 20, alignItems: "center", gap: 6 }}
+                  onPress={() => {
+                    const input = document.createElement("input");
+                    input.type = "file"; input.accept = "video/*";
+                    input.setAttribute("capture", "user");
+                    input.onchange = (e: any) => {
+                      const file = e.target?.files?.[0];
+                      if (!file) return;
+                      if (webPreview) URL.revokeObjectURL(webPreview);
+                      setVideoFile(file); setWebPreview(URL.createObjectURL(file));
+                      setFlipH(true); setStep("detalles");
+                    };
+                    input.click();
+                  }}>
+                  <Text style={{ fontSize: 40 }}>🤳</Text>
+                  <Text style={{ color: "#fff", fontSize: 16, fontWeight: "800" }}>Cámara frontal (selfie)</Text>
                 </TouchableOpacity>
 
                 {/* Separador */}
@@ -634,12 +651,12 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
                   <View style={{ flex: 1, height: 1, backgroundColor: "#ffffff22" }} />
                 </View>
 
-                {/* Botón galería */}
+                {/* Galería */}
                 <TouchableOpacity
-                  style={{ backgroundColor: "#1E293B", borderRadius: 20, padding: 20, alignItems: "center", gap: 6, borderWidth: 1, borderColor: "#334155" }}
+                  style={{ backgroundColor: "#1E293B", borderRadius: 20, padding: 16, alignItems: "center", gap: 6, borderWidth: 1, borderColor: "#334155" }}
                   onPress={pickGallery}>
-                  <Text style={{ fontSize: 36 }}>🖼️</Text>
-                  <Text style={{ color: "#CBD5E1", fontSize: 15, fontWeight: "700" }}>Subir de galería</Text>
+                  <Text style={{ fontSize: 32 }}>🖼️</Text>
+                  <Text style={{ color: "#CBD5E1", fontSize: 14, fontWeight: "700" }}>Subir de galería</Text>
                   <Text style={{ color: "#64748B", fontSize: 12 }}>MP4 · MOV · WebM · hasta 500 MB</Text>
                 </TouchableOpacity>
               </View>
@@ -795,22 +812,36 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
             ))}
           </View>
           <ScrollView style={m.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            {/* Mini-preview */}
-            <View style={{ backgroundColor: "#111", borderRadius: 14, height: 140,
-              justifyContent: "center", alignItems: "center", marginBottom: 16, gap: 6 }}>
+            {/* Mini-preview + toggle voltear */}
+            <View style={{ backgroundColor: "#111", borderRadius: 14, height: 180,
+              overflow: "hidden", marginBottom: 8, position: "relative" }}>
               {webPreview
                 ? (React.createElement as any)("video", { src: webPreview,
-                    style: { width: "100%", height: 140, objectFit: "contain", borderRadius: 14, backgroundColor: "#000",
-                      ...(curFilter.webCss ? { filter: curFilter.webCss } : {}) },
+                    style: { width: "100%", height: 180, objectFit: "cover", backgroundColor: "#000",
+                      ...(curFilter.webCss ? { filter: curFilter.webCss } : {}),
+                      ...(flipH ? { transform: "scaleX(-1)" } : {}) },
                     muted: true, loop: true, autoPlay: true, playsInline: true })
-                : <>
+                : <View style={{ flex: 1, justifyContent: "center", alignItems: "center", gap: 6 }}>
                     <Text style={{ fontSize: 36 }}>🎬</Text>
                     <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>
                       {videoFile?.name ?? "Vídeo listo"}
                     </Text>
-                  </>
+                  </View>
               }
             </View>
+            {/* Botón voltear — el usuario puede corregir manualmente */}
+            <TouchableOpacity
+              onPress={() => setFlipH(v => !v)}
+              style={{ flexDirection: "row", alignItems: "center", justifyContent: "center",
+                gap: 6, backgroundColor: flipH ? "#7C3AED22" : colors.card,
+                borderRadius: 10, paddingVertical: 8, paddingHorizontal: 14,
+                borderWidth: 1, borderColor: flipH ? "#7C3AED" : colors.cardBorder,
+                marginBottom: 16, alignSelf: "center" }}>
+              <Text style={{ fontSize: 16 }}>🔄</Text>
+              <Text style={{ color: flipH ? "#A78BFA" : colors.text, fontSize: 13, fontWeight: "700" }}>
+                {flipH ? "Volteado (frontal)" : "Sin voltear (trasera)"}
+              </Text>
+            </TouchableOpacity>
 
             {/* Tira de filtros — también accesible desde detalles */}
             <Text style={m.nuevaLabel}>Filtro visual</Text>
@@ -888,7 +919,7 @@ export default function ReelsScreen() {
   const [cargandoReceta, setCargandoReceta] = useState(false);
   const [likedHashtags, setLikedHashtags] = useState<Set<string>>(new Set());
   const [hashtagActivo, setHashtagActivo] = useState<string | null>(null);
-  const { width: SW, height: SH } = useWindowDimensions();
+  const { height: SH } = useWindowDimensions();
   const [guardandoRecetaExt, setGuardandoRecetaExt] = useState(false);
   const [recetaGuardada, setRecetaGuardada] = useState(false);
 
