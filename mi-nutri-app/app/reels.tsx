@@ -391,7 +391,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
       if (video?.uri) {
         const ext = (video.uri.split("/").pop()?.split(".").pop() ?? "mp4").split("?")[0].toLowerCase();
         setVideoFile({ uri: video.uri, type: `video/${ext}`, name: `reel.${ext}`, isNative: true, isFront: facing === "front" });
-        setFlipH(facing === "front");
+        setFlipH(true);
         setStep("detalles");
       }
     } catch {
@@ -443,6 +443,19 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
     if (!userId) { Alert.alert("Sesión caducada", "Cierra y vuelve a abrir la app."); return; }
     setSubiendo(true); setProgreso(5);
     try {
+      // Verificar que no existe ya un reel del mismo usuario para esta receta
+      const { data: existing } = await supabase
+        .from("videos_recetas")
+        .select("id")
+        .eq("autor_id", userId)
+        .eq("titulo", recetaElegida.trim())
+        .limit(1);
+      if (existing && existing.length > 0) {
+        setSubiendo(false);
+        Alert.alert("Ya publicada", "Ya tienes un reel publicado para esta receta. Elimínalo primero si quieres volver a publicarla.");
+        return;
+      }
+
       const mimeType: string = videoFile.type ?? "video/mp4";
       // Limpiar extensión (las URIs nativas pueden tener parámetros)
       const rawName = videoFile.isNative ? (videoFile.uri.split("/").pop() ?? "reel.mp4") : (videoFile.name ?? "reel.mp4");
@@ -622,29 +635,9 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
                 ))}
               </View>
               <View style={{ flex: 1, justifyContent: "center", padding: 24, gap: 12 }}>
-                {/* Cámara trasera */}
+                {/* Cámara (selfie / frontal) */}
                 <TouchableOpacity
-                  style={{ backgroundColor: "#1F6FEB", borderRadius: 20, padding: 20, alignItems: "center", gap: 6 }}
-                  onPress={() => {
-                    const input = document.createElement("input");
-                    input.type = "file"; input.accept = "video/*";
-                    input.setAttribute("capture", "environment");
-                    input.onchange = (e: any) => {
-                      const file = e.target?.files?.[0];
-                      if (!file) return;
-                      if (webPreview) URL.revokeObjectURL(webPreview);
-                      setVideoFile(file); setWebPreview(URL.createObjectURL(file));
-                      setFlipH(false); setStep("detalles");
-                    };
-                    input.click();
-                  }}>
-                  <Text style={{ fontSize: 40 }}>📹</Text>
-                  <Text style={{ color: "#fff", fontSize: 16, fontWeight: "800" }}>Cámara trasera</Text>
-                </TouchableOpacity>
-
-                {/* Cámara frontal (selfie) */}
-                <TouchableOpacity
-                  style={{ backgroundColor: "#7C3AED", borderRadius: 20, padding: 20, alignItems: "center", gap: 6 }}
+                  style={{ backgroundColor: "#1F6FEB", borderRadius: 20, padding: 24, alignItems: "center", gap: 8 }}
                   onPress={() => {
                     const input = document.createElement("input");
                     input.type = "file"; input.accept = "video/*";
@@ -658,8 +651,9 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
                     };
                     input.click();
                   }}>
-                  <Text style={{ fontSize: 40 }}>🤳</Text>
-                  <Text style={{ color: "#fff", fontSize: 16, fontWeight: "800" }}>Cámara frontal (selfie)</Text>
+                  <Text style={{ fontSize: 48 }}>📹</Text>
+                  <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800" }}>Grabar vídeo</Text>
+                  <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, textAlign: "center" }}>Abre la cámara directamente</Text>
                 </TouchableOpacity>
 
                 {/* Separador */}
@@ -847,20 +841,6 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
                   </View>
               }
             </View>
-            {/* Botón voltear — el usuario puede corregir manualmente */}
-            <TouchableOpacity
-              onPress={() => setFlipH(v => !v)}
-              style={{ flexDirection: "row", alignItems: "center", justifyContent: "center",
-                gap: 6, backgroundColor: flipH ? "#7C3AED22" : colors.card,
-                borderRadius: 10, paddingVertical: 8, paddingHorizontal: 14,
-                borderWidth: 1, borderColor: flipH ? "#7C3AED" : colors.cardBorder,
-                marginBottom: 16, alignSelf: "center" }}>
-              <Text style={{ fontSize: 16 }}>🔄</Text>
-              <Text style={{ color: flipH ? "#A78BFA" : colors.text, fontSize: 13, fontWeight: "700" }}>
-                {flipH ? "Volteado (frontal)" : "Sin voltear (trasera)"}
-              </Text>
-            </TouchableOpacity>
-
             {/* Tira de filtros — también accesible desde detalles */}
             <Text style={m.nuevaLabel}>Filtro visual</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}
