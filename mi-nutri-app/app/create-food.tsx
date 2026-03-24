@@ -22,7 +22,7 @@ type Campo = {
 };
 
 const CAMPOS: Campo[] = [
-  { key: "calorias", label: "Calorías", unit: "kcal" },
+  { key: "calorias", label: "Calorías", unit: "kcal", decimal: true },
   { key: "proteinas", label: "Proteínas", unit: "g/100g", decimal: true },
   { key: "carbohidratos", label: "Carbohidratos", unit: "g/100g", decimal: true },
   { key: "azucares", label: "Azúcares", unit: "g/100g", decimal: true },
