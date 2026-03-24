@@ -77,7 +77,11 @@ export default function SettingsScreen() {
     setAvatarUri(dataUri);
     AsyncStorage.setItem(AVATAR_KEY, dataUri);
     if (userId) {
-      supabase.from("perfiles").update({ avatar_url: dataUri }).eq("id", userId);
+      // upsert: crea la fila si no existe (evita que update falle silenciosamente)
+      supabase.from("perfiles").upsert(
+        { id: userId, avatar_url: dataUri, ...(profile?.nombre ? { nombre: profile.nombre } : {}) },
+        { onConflict: "id" }
+      );
     }
   };
 
@@ -203,13 +207,14 @@ export default function SettingsScreen() {
 
       const goals = calcularObjetivos(newProfile);
 
-      const { error } = await supabase.from("perfiles").update({
+      const { error } = await supabase.from("perfiles").upsert({
+        id: userId,
         ...newProfile,
         calorias_objetivo: goals.calories,
         proteina_objetivo: goals.protein,
         carbos_objetivo: goals.carbs,
         grasa_objetivo: goals.fat,
-      }).eq("id", userId);
+      }, { onConflict: "id" });
 
       if (error) { setErrorEdit("Error al guardar: " + error.message); setGuardando(false); return; }
 

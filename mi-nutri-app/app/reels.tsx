@@ -91,10 +91,16 @@ function VideoPlayer({ url, active, muted, onToggleMute, filtro, camaraFrontal }
     fsRef.current.play?.().catch(() => {});
   }, [webFullscreen]);
 
-  // Mute / unmute sin recargar el vídeo
+  // Mute / unmute sin recargar el vídeo — al dessilenciar, forzar play con audio
   useEffect(() => {
     if (Platform.OS !== "web") return;
-    if (ref.current) ref.current.muted = muted;
+    if (ref.current) {
+      ref.current.muted = muted;
+      // Si se acaba de dessilenciar y el vídeo está activo, reintentar play con audio
+      if (!muted && active) {
+        ref.current.play?.().catch(() => { ref.current.muted = true; });
+      }
+    }
     if (fsRef.current) fsRef.current.muted = muted;
   }, [muted]);
 
@@ -126,6 +132,18 @@ function VideoPlayer({ url, active, muted, onToggleMute, filtro, camaraFrontal }
             }
           },
         })}
+        {/* Hint "toca para activar audio" — visible solo cuando está silenciado */}
+        {muted && (
+          <TouchableOpacity
+            style={{ position: "absolute", top: 16, alignSelf: "center", left: 0, right: 0, alignItems: "center" }}
+            onPress={onToggleMute}
+            activeOpacity={0.7}>
+            <View style={{ backgroundColor: "rgba(0,0,0,0.55)", borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Text style={{ fontSize: 16 }}>🔇</Text>
+              <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>Toca para activar audio</Text>
+            </View>
+          </TouchableOpacity>
+        )}
         {/* Controles superpuestos */}
         <View style={vid.controls} pointerEvents="box-none">
           <TouchableOpacity style={vid.btn} onPress={onToggleMute}>
@@ -906,7 +924,7 @@ export default function ReelsScreen() {
   const [siguiendoReels, setSiguiendoReels] = useState<Reel[]>([]);
   const [cargando, setCargando] = useState(true);
   const [activeIdx, setActiveIdx] = useState(0);
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(true);  // empieza silenciado — autoplay garantizado; usuario toca 🔊 para activar
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const [seguidosIds, setSeguidosIds] = useState<Set<string>>(new Set());
   const [nombreUsuario, setNombreUsuario] = useState("");
