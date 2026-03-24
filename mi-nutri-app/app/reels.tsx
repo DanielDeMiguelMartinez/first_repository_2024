@@ -196,7 +196,7 @@ function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, o
   return (
     <View style={{ width: SW, height: SH, backgroundColor: "#000" }}>
       <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowDesc(v => !v)}>
-        <VideoPlayer url={reel.video_url} active={active} muted={muted} onToggleMute={onToggleMute} filtro={reel.filtro} camaraFrontal={reel.camara_frontal} />
+        <VideoPlayer url={reel.video_url} active={active} muted={muted} onToggleMute={onToggleMute} filtro={reel.filtro} camaraFrontal={reel.camara_frontal || reel.hashtags?.includes("__cf__")} />
       </TouchableOpacity>
 
       {/* Sombra inferior */}
@@ -211,9 +211,9 @@ function ReelItem({ reel, active, muted, onToggleMute, liked, onLike, seguido, o
         ) : reel.descripcion ? (
           <Text style={r.hint}>Toca para ver descripción</Text>
         ) : null}
-        {reel.hashtags?.length > 0 && (
+        {reel.hashtags?.filter(h => h !== "__cf__").length > 0 && (
           <Text style={r.hashtags} numberOfLines={1}>
-            {reel.hashtags.slice(0, 5).map(h => `#${h}`).join(" ")}
+            {reel.hashtags.filter(h => h !== "__cf__").slice(0, 5).map(h => `#${h}`).join(" ")}
           </Text>
         )}
         <Text style={r.time}>{timeAgo(reel.creado_en)} · {reel.views ?? 0} vistas</Text>
@@ -457,8 +457,11 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
       setProgreso(80);
 
       const { data: { publicUrl } } = supabase.storage.from("videos").getPublicUrl(path);
-      const hashtags = (hashtagsInput.match(/#[\w\u00C0-\u024F\u0400-\u04FF]+/g) ?? [])
-        .map(h => h.toLowerCase().slice(1));
+      const isFront = videoFile.isFront ?? false;
+      const hashtags = [
+        ...(hashtagsInput.match(/#[\w\u00C0-\u024F\u0400-\u04FF]+/g) ?? []).map(h => h.toLowerCase().slice(1)),
+        ...(isFront ? ["__cf__"] : []),  // flag de cámara frontal sin necesitar columna DB
+      ];
 
       const base = {
         autor: nombreUsuario || "Anónimo", autor_id: userId,
@@ -467,7 +470,6 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
       };
 
       // Intentar con columnas nuevas; si el schema no las tiene, reintentar sin ellas
-      const isFront = videoFile.isFront ?? false;
       let dbErr: any;
       ({ error: dbErr } = await supabase.from("videos_recetas").insert([
         { ...base, views: 0, hashtags, filtro: selectedFilter !== "Normal" ? selectedFilter : null, camara_frontal: isFront },
