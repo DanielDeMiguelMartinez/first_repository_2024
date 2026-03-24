@@ -116,8 +116,12 @@ function VideoPlayer({ url, active, muted, onToggleMute, filtro, camaraFrontal }
             objectFit: "cover",
             display: "block",
             backgroundColor: "#000",
+            // Hardware acceleration para máxima nitidez
+            willChange: "transform",
+            backfaceVisibility: "hidden",
+            WebkitBackfaceVisibility: "hidden",
             ...(filterCss ? { filter: filterCss } : {}),
-            ...(camaraFrontal ? { transform: "scaleX(-1)" } : {}),
+            ...(camaraFrontal ? { transform: "scaleX(-1)", WebkitTransform: "scaleX(-1)" } : {}),
           },
           muted: muted,
           loop: true,
@@ -830,8 +834,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, recetaP
               {webPreview
                 ? (React.createElement as any)("video", { src: webPreview,
                     style: { width: "100%", height: 180, objectFit: "cover", backgroundColor: "#000",
-                      ...(curFilter.webCss ? { filter: curFilter.webCss } : {}),
-                      ...(flipH ? { transform: "scaleX(-1)" } : {}) },
+                      ...(curFilter.webCss ? { filter: curFilter.webCss } : {}) },
                     muted: true, loop: true, autoPlay: true, playsInline: true })
                 : <View style={{ flex: 1, justifyContent: "center", alignItems: "center", gap: 6 }}>
                     <Text style={{ fontSize: 36 }}>🎬</Text>
