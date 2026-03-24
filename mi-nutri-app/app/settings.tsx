@@ -82,6 +82,10 @@ export default function SettingsScreen() {
         { id: userId, avatar_url: dataUri, ...(profile?.nombre ? { nombre: profile.nombre } : {}) },
         { onConflict: "id" }
       );
+      // Actualizar avatar en todas las publicaciones de comunidad del usuario
+      if (profile?.nombre) {
+        supabase.from("publicaciones_recetas").update({ autor_avatar: dataUri }).eq("autor", profile.nombre);
+      }
     }
   };
 

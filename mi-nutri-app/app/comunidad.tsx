@@ -429,6 +429,18 @@ function ModalPublicar({
   const publicar = async () => {
     if (!seleccionada) { Alert.alert("", "Selecciona una receta para publicar."); return; }
     setPublicando(true);
+    // Verificar que el usuario no ha publicado ya esta receta
+    const { data: existing } = await supabase
+      .from("publicaciones_recetas")
+      .select("id")
+      .eq("autor", nombreUsuario || "Anónimo")
+      .eq("nombre_receta", seleccionada.nombre)
+      .limit(1);
+    if (existing && existing.length > 0) {
+      setPublicando(false);
+      Alert.alert("Ya publicada", "Ya has compartido esta receta en la comunidad. Elimínala si quieres volver a publicarla.");
+      return;
+    }
     const { error } = await supabase.from("publicaciones_recetas").insert([{
       nombre_receta: seleccionada.nombre,
       descripcion: seleccionada.descripcion || "",
