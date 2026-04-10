@@ -611,8 +611,12 @@ function VideoPlayer({ url, active, filtro, camaraFrontal, cancionUrl, cancionSt
     if (Platform.OS !== "web" || !ref.current) return;
 
     if (active) {
-      ref.current.muted = webMuted || !!muteVideo;
-      ref.current.play?.().catch(() => {});
+      // Mute via ref (NOT via React prop — React tiene un bug conocido con el atributo muted)
+      ref.current.muted = true; // muted primero para que el navegador permita autoplay
+      ref.current.play?.().then(() => {
+        // Una vez arrancado, aplicar preferencia del usuario
+        if (ref.current) ref.current.muted = (webMuted !== false) || !!muteVideo;
+      }).catch(() => {});
 
       // Música web
       if (cancionUrl && typeof window !== "undefined" && (window as any).Audio) {
@@ -687,7 +691,6 @@ function VideoPlayer({ url, active, filtro, camaraFrontal, cancionUrl, cancionSt
           ...(filterCss ? { filter: filterCss } : {}),
           ...(camaraFrontal ? { transform: "scaleX(-1)", WebkitTransform: "scaleX(-1)" } : {}),
         },
-        muted: webMuted !== false,
         loop: true,
         playsInline: true,
       })}
