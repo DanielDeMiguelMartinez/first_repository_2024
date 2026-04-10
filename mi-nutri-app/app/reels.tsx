@@ -544,17 +544,16 @@ function PhotoSlideshow({ fotos, active }: { fotos: string[]; active: boolean })
 }
 
 // ─── Reproductor ──────────────────────────────────────────────────────────────
-function VideoPlayer({ url, active, filtro, camaraFrontal, cancionUrl, cancionStart, cancionVolumen, muteVideo }: {
+function VideoPlayer({ url, active, filtro, camaraFrontal, cancionUrl, cancionStart, cancionVolumen, muteVideo, webMuted }: {
   url: string; active: boolean;
   filtro?: string; camaraFrontal?: boolean; cancionUrl?: string; cancionStart?: number;
-  cancionVolumen?: number; muteVideo?: boolean;
+  cancionVolumen?: number; muteVideo?: boolean; webMuted?: boolean;
 }) {
   const filterCss = filtro ? (FILTERS.find(f => f.name === filtro)?.webCss ?? "") : "";
   const ref = useRef<any>(null);
   const fsRef = useRef<any>(null);
   const musicRef = useRef<any>(null);
   const [webFullscreen, setWebFullscreen] = useState(false);
-  const [webMuted, setWebMuted] = useState(true); // empieza muted para que el navegador permita autoplay
 
   // ── Native refs ───────────────────────────────────────────────────────────
   const nativeVideoRef = useRef<any>(null);
@@ -688,19 +687,15 @@ function VideoPlayer({ url, active, filtro, camaraFrontal, cancionUrl, cancionSt
           ...(filterCss ? { filter: filterCss } : {}),
           ...(camaraFrontal ? { transform: "scaleX(-1)", WebkitTransform: "scaleX(-1)" } : {}),
         },
-        muted: true,
+        muted: webMuted !== false,
         loop: true,
         playsInline: true,
       })}
 
-      {/* Botones web: desmutar + pantalla completa */}
+      {/* Solo botón pantalla completa */}
       <View style={vid.controls} pointerEvents="box-none">
         <TouchableOpacity style={vid.btn} onPress={() => setWebFullscreen(true)}>
           <Text style={vid.btnTxt}>⛶</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[vid.btn, { backgroundColor: webMuted ? "rgba(239,68,68,0.7)" : "rgba(30,200,80,0.7)" }]}
-          onPress={() => setWebMuted(v => !v)} pointerEvents="auto">
-          <Text style={vid.btnTxt}>{webMuted ? "🔇" : "🔊"}</Text>
         </TouchableOpacity>
       </View>
 
@@ -753,6 +748,7 @@ function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDel
   const insets = useSafeAreaInsets();
   const [showDesc, setShowDesc] = useState(false);
   const [macros, setMacros] = useState<{ kcal: number; prot: number } | null>(null);
+  const [webMuted, setWebMuted] = useState(true);
 
   // Like bounce
   const likeScale = useRef(new Animated.Value(1)).current;
@@ -804,13 +800,25 @@ function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDel
           : <VideoPlayer url={reel.video_url} active={active}
               filtro={reel.filtro} camaraFrontal={reel.camara_frontal || reel.hashtags?.includes("__cf__")}
               cancionUrl={reel.cancion_url} cancionStart={reel.cancion_start ?? 0}
-              cancionVolumen={reel.cancion_volumen ?? 1} muteVideo={!!reel.mute_video} />
+              cancionVolumen={reel.cancion_volumen ?? 1} muteVideo={!!reel.mute_video}
+              webMuted={webMuted} />
         }
       </TouchableOpacity>
 
       {/* Gradiente inferior fuerte */}
       <View pointerEvents="none"
         style={[r.shadow, { background: "linear-gradient(to top,rgba(0,0,0,0.94) 0%,rgba(0,0,0,0.6) 40%,transparent 100%)" } as any]} />
+
+      {/* Botón mute (solo web) */}
+      {Platform.OS === "web" && (
+        <TouchableOpacity
+          onPress={() => setWebMuted(v => !v)}
+          style={{ position: "absolute", top: insets.top + 10, right: 12, zIndex: 30,
+            backgroundColor: webMuted ? "rgba(0,0,0,0.55)" : "rgba(30,180,70,0.75)",
+            borderRadius: 22, width: 42, height: 42, alignItems: "center", justifyContent: "center" }}>
+          <Text style={{ fontSize: 20 }}>{webMuted ? "🔇" : "🔊"}</Text>
+        </TouchableOpacity>
+      )}
 
       {/* No me interesa */}
       <View style={{ position: "absolute", top: insets.top + 8, left: 12 }} pointerEvents="box-none">
