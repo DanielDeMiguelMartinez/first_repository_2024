@@ -1,24 +1,77 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Stack, useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Animated, Platform, Text, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Animated, Platform, Text, TouchableOpacity, View } from "react-native";
 import {
   AppContext,
   DARK_COLORS,
   Language,
-  LANGUAGE_KEY,
   LIGHT_COLORS,
   Theme,
   THEME_KEY,
+  LANGUAGE_KEY,
   TRANSLATIONS,
 } from "./services/i18n";
 import { supabase } from "./services/supabase";
+import { setUserLanguage } from "./services/openFoodFacts";
+import { setD1TokenProvider } from "./services/d1";
+
+// Inyectar proveedor de JWT para que el proxy D1 autentique con Supabase
+setD1TokenProvider(() =>
+  supabase.auth.getSession().then(({ data }) => data.session?.access_token ?? null)
+);
 
 // useNativeDriver solo funciona en iOS/Android, no en web
 const nativeDriver = Platform.OS !== "web";
 
+// ── Error Boundary ────────────────────────────────────────────────────────────
+function ErrorFallback({ error, onReset }: { error: Error | null; onReset: () => void }) {
+  return (
+    <View style={{ flex: 1, backgroundColor: "#0A0F1A", alignItems: "center", justifyContent: "center", padding: 32, gap: 16 }}>
+      <Text style={{ fontSize: 56 }}>⚠️</Text>
+      <Text style={{ color: "#fff", fontSize: 20, fontWeight: "900", textAlign: "center" }}>Algo salió mal</Text>
+      <Text style={{ color: "#475569", fontSize: 13, textAlign: "center", lineHeight: 20 }}>
+        {error?.message ?? "Error inesperado"}
+      </Text>
+      <TouchableOpacity
+        onPress={onReset}
+        style={{ backgroundColor: "#1F6FEB", borderRadius: 14, paddingHorizontal: 28, paddingVertical: 14, marginTop: 8 }}
+      >
+        <Text style={{ color: "#fff", fontSize: 15, fontWeight: "800" }}>Reintentar</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error("[ErrorBoundary]", error, info.componentStack);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <ErrorFallback
+          error={this.state.error}
+          onReset={() => this.setState({ hasError: false, error: null })}
+        />
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ── Splash screen ─────────────────────────────────────────────────────────────
-function SplashScreen() {
+function SplashScreen({ tagline }: { tagline?: string }) {
   const opacity = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(opacity, {
@@ -42,14 +95,16 @@ function SplashScreen() {
       <Text style={{ color: "#fff", fontSize: 28, fontWeight: "900", letterSpacing: -1 }}>
         NutriTrack
       </Text>
-      <Text style={{ color: "#475569", fontSize: 14 }}>Tu diario nutricional personal</Text>
+      <Text style={{ color: "#475569", fontSize: 14 }}>
+        {tagline ?? "Your personal nutrition diary"}
+      </Text>
       <ActivityIndicator color="#1F6FEB" style={{ marginTop: 24 }} />
     </Animated.View>
   );
 }
 
 // ── Banner de sin conexión ────────────────────────────────────────────────────
-function NetworkBanner({ visible }: { visible: boolean }) {
+function NetworkBanner({ visible, noConnectionMsg }: { visible: boolean; noConnectionMsg: string }) {
   const translateY = useRef(new Animated.Value(-50)).current;
   useEffect(() => {
     Animated.spring(translateY, {
@@ -83,7 +138,7 @@ function NetworkBanner({ visible }: { visible: boolean }) {
       >
         <Text style={{ fontSize: 14 }}>📡</Text>
         <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>
-          Sin conexión — trabajando en modo local
+          {noConnectionMsg}
         </Text>
       </View>
     </Animated.View>
@@ -99,13 +154,38 @@ function detectarIdiomaDispositivo(): Language {
       "es";
     const code = locale.slice(0, 2).toLowerCase();
     // Map locale code → supported Language
-    const MAP: Record<string, Language> = {
-      es: "es", ca: "es", gl: "es", eu: "es", pt: "es", // Iberian → Spanish
-      fr: "fr", oc: "fr",                                // French group
-      de: "de", nl: "de", sv: "de", da: "de", nb: "de", no: "de", fi: "de", // Germanic → German
-      zh: "zh",                                           // Chinese
+    const MAP: Record<string, string> = {
+      es: "es", gl: "es", eu: "es",
+      ca: "ca",
+      pt: "pt",
+      fr: "fr", oc: "fr",
+      it: "it",
+      de: "de",
+      nl: "nl",
+      sv: "sv",
+      da: "da",
+      nb: "nb", no: "nb",
+      fi: "fi",
+      pl: "pl",
+      cs: "cs",
+      sk: "sk",
+      hu: "hu",
+      ro: "ro",
+      uk: "uk",
+      ru: "ru",
+      el: "el",
+      he: "he",
+      ar: "ar",
+      hi: "hi",
+      th: "th",
+      vi: "vi",
+      id: "id", ms: "id",
+      ja: "ja",
+      ko: "ko",
+      zh: "zh",
+      tr: "tr",
     };
-    return MAP[code] ?? "en";
+    return (MAP[code] as Language) ?? "en";
   } catch {
     return "es";
   }
@@ -138,18 +218,24 @@ export default function RootLayout() {
   const [isOnline, setIsOnline] = useState(true);
   const router = useRouter();
 
-  // Cargar preferencias guardadas
+  // Cargar tema e idioma persistidos; si el usuario eligió idioma manual se respeta,
+  // si no, se detecta del dispositivo como fallback.
   useEffect(() => {
     (async () => {
       try {
-        const [storedLang, storedTheme] = await Promise.all([
-          AsyncStorage.getItem(LANGUAGE_KEY),
-          AsyncStorage.getItem(THEME_KEY),
-        ]);
-        if (storedLang) setLanguageState(storedLang as Language);
-        else setLanguageState(detectarIdiomaDispositivo());
+        const storedTheme = await AsyncStorage.getItem(THEME_KEY);
         if (storedTheme) setThemeState(storedTheme as Theme);
       } catch {}
+      try {
+        const storedLang = await AsyncStorage.getItem(LANGUAGE_KEY);
+        const lang: Language = (storedLang as Language) ?? detectarIdiomaDispositivo();
+        setLanguageState(lang);
+        setUserLanguage(lang);
+      } catch {
+        const lang = detectarIdiomaDispositivo();
+        setLanguageState(lang);
+        setUserLanguage(lang);
+      }
       setLoaded(true);
     })();
   }, []);
@@ -262,6 +348,7 @@ export default function RootLayout() {
 
   const setLanguage = async (l: Language) => {
     setLanguageState(l);
+    setUserLanguage(l);
     await AsyncStorage.setItem(LANGUAGE_KEY, l);
   };
 
@@ -270,35 +357,43 @@ export default function RootLayout() {
     await AsyncStorage.setItem(THEME_KEY, t);
   };
 
-  if (!loaded) return <SplashScreen />;
-
   const t = TRANSLATIONS[language];
   const colors = theme === "dark" ? DARK_COLORS : LIGHT_COLORS;
 
+  if (!loaded) return <SplashScreen tagline={t.appTagline} />;
+
   return (
-    <AppContext.Provider value={{ language, theme, t, setLanguage, setTheme, colors }}>
-      <NetworkBanner visible={!isOnline} />
-      <Stack
-        screenOptions={{
-          headerStyle: { backgroundColor: colors.bg },
-          headerTintColor: colors.text,
-          headerShadowVisible: false,
-          contentStyle: { backgroundColor: colors.bg },
-          animation: "fade_from_bottom",
-        }}
-      >
-        <Stack.Screen name="index"       options={{ headerShown: false }} />
-        <Stack.Screen name="auth"        options={{ headerShown: false }} />
-        <Stack.Screen name="onboarding"  options={{ headerShown: false }} />
-        <Stack.Screen name="add-food"    options={{ headerShown: false }} />
-        <Stack.Screen name="scanner"     options={{ headerShown: false }} />
-        <Stack.Screen name="recetas"     options={{ headerShown: false }} />
-        <Stack.Screen name="create-food" options={{ headerShown: false }} />
-        <Stack.Screen name="settings"    options={{ headerShown: false }} />
-        <Stack.Screen name="comunidad"   options={{ headerShown: false }} />
-        <Stack.Screen name="reels"       options={{ headerShown: false }} />
-        <Stack.Screen name="seguimiento" options={{ headerShown: false }} />
-      </Stack>
-    </AppContext.Provider>
+    <ErrorBoundary>
+      <AppContext.Provider value={{ language, theme, t, setLanguage, setTheme, colors, isOnline }}>
+        <NetworkBanner visible={!isOnline} noConnectionMsg={t.noConnection} />
+        <Stack
+          screenOptions={{
+            headerStyle: { backgroundColor: colors.bg },
+            headerTintColor: colors.text,
+            headerShadowVisible: false,
+            contentStyle: { backgroundColor: colors.bg },
+            animation: "fade_from_bottom",
+          }}
+        >
+          <Stack.Screen name="index"       options={{ headerShown: false }} />
+          <Stack.Screen name="auth"        options={{ headerShown: false }} />
+          <Stack.Screen name="onboarding"  options={{ headerShown: false }} />
+          <Stack.Screen name="add-food"    options={{ headerShown: false }} />
+          <Stack.Screen name="scanner"     options={{ headerShown: false }} />
+          <Stack.Screen name="recetas"     options={{ headerShown: false }} />
+          <Stack.Screen name="create-food" options={{ headerShown: false }} />
+          <Stack.Screen name="edit-food"   options={{ headerShown: false }} />
+          <Stack.Screen name="settings"    options={{ headerShown: false }} />
+          <Stack.Screen name="comunidad"      options={{ headerShown: false }} />
+          <Stack.Screen name="reels"         options={{ headerShown: false }} />
+          <Stack.Screen name="perfil"        options={{ headerShown: false }} />
+          <Stack.Screen name="buscar"        options={{ headerShown: false }} />
+          <Stack.Screen name="usuario/[id]"  options={{ headerShown: false }} />
+          <Stack.Screen name="notificaciones" options={{ headerShown: false }} />
+          <Stack.Screen name="widget"         options={{ headerShown: false }} />
+          <Stack.Screen name="seguimiento"   options={{ headerShown: false }} />
+        </Stack>
+      </AppContext.Provider>
+    </ErrorBoundary>
   );
 }

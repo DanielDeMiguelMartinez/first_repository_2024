@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Mi Nutri",
+    "slug": "mi-nutri-app",
+    "android": {
+      "package": "com.anonymous.minutriapp"
+    },
+    "ios": {
+      "bundleIdentifier": "com.anonymous.minutriapp",
+      "entitlements": {
+        "com.apple.security.application-groups": ["group.com.anonymous.minutriapp"]
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/images/logo.png",
+      "name": "Mi Nutri",
+      "shortName": "MiNutri",
+      "description": "Tu asistente de nutrición personalizado",
+      "themeColor": "#F5F0E8",
+      "backgroundColor": "#F5F0E8",
+      "display": "standalone",
+      "startUrl": "/",
+      "lang": "es"
+    },
+    "plugins": [
+      "./plugins/withMacroWidget"
+    ]
+  }
+}
