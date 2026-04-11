@@ -1,18 +1,23 @@
 import { calcularMacros, Nutrientes } from "@/app/services/calcularMacros";
+import { actualizarRacha } from "@/app/services/gamification";
 import { useApp } from "@/app/services/i18n";
-import { buscarDesdeEscaneo, buscarProductosPorNombre } from "@/app/services/openFoodFacts";
+import { ALERGENOS_KEYWORDS } from "@/app/onboarding";
+import { buscarDesdeEscaneoMultiple, buscarProductosPorNombre } from "@/app/services/openFoodFacts";
 import { signalMealSaved } from "@/app/services/refreshSignal";
-import { buscarAlimentosPersonalizados, supabase } from "@/app/services/supabase";
+import { buscarAlimentosPersonalizados, guardarAlimentoBuscado, supabase } from "@/app/services/supabase";
+import { detectarPaisUsuario } from "@/app/services/countryDetector";
+import { rankear } from "@/app/services/fuzzySearch";
+import { preprocesarQuery, normQuery } from "@/app/services/queryExpander";
+import { syncDayToCloud } from "@/app/services/cloudSync";
+import { FoodUnit, FOOD_UNIT_GRAMS, fromGrams } from "@/app/services/units";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Animated, Keyboard, PanResponder, Platform,
+  ActivityIndicator, Alert, FlatList, Keyboard, Platform,
   SafeAreaView, ScrollView, StatusBar, StyleSheet, Text,
   TextInput, TouchableOpacity, View,
 } from "react-native";
-
-const nativeDriver = Platform.OS !== "web";
 
 function getTodayKey(): string {
   const d = new Date();
@@ -21,8 +26,9 @@ function getTodayKey(): string {
 const STORAGE_KEY = getTodayKey();
 const RECENT_FOODS_KEY = "nutri_recent_foods_v2";
 const FAVORITES_KEY = "nutri_favorites";
-const SEARCH_CACHE_KEY = "nutri_search_cache_v1";
-const CACHE_TTL = 1000 * 60 * 60 * 6;
+const SEARCH_CACHE_KEY = "nutri_search_cache_v1"; // kept for legacy cleanup only
+// País detectado una sola vez al iniciar (no cambia durante la sesión)
+const PAIS_USUARIO = detectarPaisUsuario();
 
 type MealKey = "desayuno" | "comida" | "merienda" | "cena";
 const MEAL_LABELS: Record<MealKey, string> = { desayuno: "Desayuno", comida: "Comida", merienda: "Merienda", cena: "Cena" };
@@ -47,9 +53,75 @@ type Producto = {
   marca: string;
   nutrientes: Nutrientes;
   pesoEnvase?: number;
+  nombreUnidadEnvase?: string;
   esPersonalizado?: boolean;
   porciones?: Porcion[];
+  codigoBarras?: string;
+  scanCount?: number;  // popularidad: veces escaneado en la comunidad
 };
+
+/** Devuelve el nombre de la unidad del envase según el tipo de producto */
+function detectarNombreUnidad(nombre: string, _peso: number): string {
+  const n = nombre.toLowerCase();
+  if (/yogur|yogurt/.test(n))                                   return "1 yogur";
+  if (/huevo|egg/.test(n))                                      return "1 huevo";
+  if (/barrita|bar\b/.test(n))                                  return "1 barrita";
+  if (/galleta(?!s)/.test(n))                                   return "1 galleta";
+  if (/galletas/.test(n))                                       return "1 paquete";
+  if (/magdalena|muffin/.test(n))                               return "1 magdalena";
+  if (/donut/.test(n))                                          return "1 donut";
+  if (/croissant/.test(n))                                      return "1 croissant";
+  if (/pan de molde|pan molde/.test(n))                         return "1 rebanada";
+  if (/chocolate/.test(n))                                      return "1 onza";
+  if (/bombón|bombon/.test(n))                                  return "1 bombón";
+  if (/caramelo/.test(n))                                       return "1 caramelo";
+  if (/lata|conserva/.test(n))                                  return "1 lata";
+  if (/bote/.test(n))                                           return "1 bote";
+  if (/botella/.test(n))                                        return "1 botella";
+  if (/refresco|soda/.test(n))                                  return "1 lata";
+  if (/zumo|juice/.test(n))                                     return "1 vaso";
+  if (/leche|milk/.test(n))                                     return "1 vaso";
+  if (/café|cafe|coffee/.test(n))                               return "1 taza";
+  if (/té\b|te\b|tea/.test(n))                                  return "1 taza";
+  if (/bolsa|chips|snack|palomita/.test(n))                     return "1 bolsa";
+  if (/proteína|proteina|whey|casein|scoop/.test(n))            return "1 scoop";
+  if (/manzana|pera|naranja|plátano|platano|kiwi|melocotón|melocoton|ciruela|mandarina/.test(n)) return "1 unidad";
+  return "1 envase";
+}
+
+// ── QuantitySelector ──────────────────────────────────────────────────────────
+const ENVASE_CACHE_KEY        = (id: string) => `nutri_envase_v2_${id.toLowerCase().trim()}`;
+const ENVASE_NOMBRE_CACHE_KEY = (id: string) => `nutri_envase_nombre_${id.toLowerCase().trim()}`;
+
+type UnitChip = {
+  key: string;
+  topLine: string;
+  bottomLine?: string;
+  grams: number;
+  hasQty?: boolean;
+  isGram?: boolean;
+};
+
+function buildChips(prod: Producto, envaseNum: number, nombreEnvaseCustom?: string): UnitChip[] {
+  const chips: UnitChip[] = [];
+  if (prod.porciones?.length) {
+    for (const p of prod.porciones)
+      chips.push({ key: `p_${p.nombre}`, topLine: p.nombre, bottomLine: `${p.gramos} g`, grams: p.gramos, hasQty: true });
+  }
+  const envase = prod.pesoEnvase ?? (envaseNum > 0 ? envaseNum : 0);
+  if (envase > 0) {
+    const raw  = nombreEnvaseCustom?.trim()
+      ? (nombreEnvaseCustom.trim().match(/^\d/) ? nombreEnvaseCustom.trim() : `1 ${nombreEnvaseCustom.trim()}`)
+      : (prod.nombreUnidadEnvase ?? detectarNombreUnidad(prod.nombre, envase));
+    const unit = raw.replace(/^1\s/, "");
+    chips.push({ key: "e1",  topLine: raw,          bottomLine: `${envase} g`,                   grams: envase,                   hasQty: true });
+    chips.push({ key: "e_h", topLine: `½ ${unit}`,  bottomLine: `${Math.round(envase * 0.5)} g`, grams: Math.round(envase * 0.5) });
+    chips.push({ key: "e_q", topLine: `¼ ${unit}`,  bottomLine: `${Math.round(envase * 0.25)} g`,grams: Math.round(envase * 0.25) });
+  }
+  chips.push({ key: "g", topLine: "g", grams: 1, isGram: true });
+  return chips;
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 type RecentFood = Producto & { addedAt: number };
 type FavoriteFood = Producto & { savedAt: number };
@@ -97,30 +169,184 @@ const ALIMENTOS_BASICOS: Producto[] = [
   { nombre: "Atún en lata", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 116, proteinas: 25, grasas: 1, grasasSaturadas: 0.3, carbohidratos: 0, azucares: 0, fibra: 0, sal: 0.8 } },
   { nombre: "Jamón serrano", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 241, proteinas: 30, grasas: 12, grasasSaturadas: 4.2, carbohidratos: 0.5, azucares: 0.5, fibra: 0, sal: 4.5 } },
   { nombre: "Chocolate negro 70%", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 598, proteinas: 7.8, grasas: 43, grasasSaturadas: 25, carbohidratos: 46, azucares: 28, fibra: 10, sal: 0.1 } },
+  // ── Especias y hierbas ─────────────────────────────────────────────────────
+  { nombre: "Sal", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 0, proteinas: 0, grasas: 0, grasasSaturadas: 0, carbohidratos: 0, azucares: 0, fibra: 0, sal: 100 } },
+  { nombre: "Pimienta negra", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 251, proteinas: 10, grasas: 3.3, grasasSaturadas: 0.9, carbohidratos: 64, azucares: 0.6, fibra: 25, sal: 0 } },
+  { nombre: "Pimienta blanca", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 296, proteinas: 10, grasas: 2.1, grasasSaturadas: 0.6, carbohidratos: 68, azucares: 0, fibra: 26, sal: 0 } },
+  { nombre: "Pimentón dulce", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 282, proteinas: 14, grasas: 13, grasasSaturadas: 2.1, carbohidratos: 54, azucares: 10, fibra: 34, sal: 0.1 } },
+  { nombre: "Pimentón picante", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 282, proteinas: 14, grasas: 13, grasasSaturadas: 2.1, carbohidratos: 54, azucares: 10, fibra: 34, sal: 0.1 } },
+  { nombre: "Pimentón ahumado", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 282, proteinas: 14, grasas: 13, grasasSaturadas: 2.1, carbohidratos: 54, azucares: 10, fibra: 34, sal: 0.1 } },
+  { nombre: "Comino", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 375, proteinas: 18, grasas: 22, grasasSaturadas: 1.5, carbohidratos: 44, azucares: 2.3, fibra: 11, sal: 0.2 } },
+  { nombre: "Orégano", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 265, proteinas: 9, grasas: 4.3, grasasSaturadas: 1.6, carbohidratos: 69, azucares: 4.1, fibra: 43, sal: 0 } },
+  { nombre: "Albahaca seca", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 233, proteinas: 23, grasas: 4, grasasSaturadas: 0, carbohidratos: 48, azucares: 1.7, fibra: 38, sal: 0 } },
+  { nombre: "Albahaca fresca", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 22, proteinas: 3.2, grasas: 0.6, grasasSaturadas: 0, carbohidratos: 2.7, azucares: 0.3, fibra: 1.6, sal: 0 } },
+  { nombre: "Romero", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 131, proteinas: 3.3, grasas: 5.9, grasasSaturadas: 2.8, carbohidratos: 21, azucares: 0.7, fibra: 14, sal: 0 } },
+  { nombre: "Tomillo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 101, proteinas: 5.6, grasas: 1.7, grasasSaturadas: 0.6, carbohidratos: 24, azucares: 0, fibra: 14, sal: 0 } },
+  { nombre: "Laurel", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 313, proteinas: 7.6, grasas: 8.4, grasasSaturadas: 2.3, carbohidratos: 75, azucares: 0, fibra: 26, sal: 0 } },
+  { nombre: "Canela", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 247, proteinas: 4, grasas: 1.2, grasasSaturadas: 0.3, carbohidratos: 81, azucares: 2.2, fibra: 53, sal: 0 } },
+  { nombre: "Cúrcuma", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 354, proteinas: 8, grasas: 10, grasasSaturadas: 3.1, carbohidratos: 65, azucares: 3.2, fibra: 21, sal: 0 } },
+  { nombre: "Jengibre en polvo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 335, proteinas: 9, grasas: 4.2, grasasSaturadas: 1.2, carbohidratos: 72, azucares: 3.4, fibra: 14, sal: 0 } },
+  { nombre: "Jengibre fresco", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 80, proteinas: 1.8, grasas: 0.8, grasasSaturadas: 0.2, carbohidratos: 18, azucares: 1.7, fibra: 2, sal: 0 } },
+  { nombre: "Azafrán", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 310, proteinas: 11, grasas: 5.9, grasasSaturadas: 1.6, carbohidratos: 65, azucares: 0, fibra: 4, sal: 0 } },
+  { nombre: "Nuez moscada", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 525, proteinas: 5.8, grasas: 36, grasasSaturadas: 25, carbohidratos: 49, azucares: 2.9, fibra: 21, sal: 0 } },
+  { nombre: "Clavo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 274, proteinas: 6, grasas: 13, grasasSaturadas: 3.6, carbohidratos: 66, azucares: 2.4, fibra: 34, sal: 0.3 } },
+  { nombre: "Cardamomo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 311, proteinas: 11, grasas: 6.7, grasasSaturadas: 0.7, carbohidratos: 68, azucares: 0.4, fibra: 28, sal: 0 } },
+  { nombre: "Curry en polvo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 325, proteinas: 14, grasas: 14, grasasSaturadas: 2, carbohidratos: 58, azucares: 2.8, fibra: 33, sal: 0.1 } },
+  { nombre: "Garam masala", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 379, proteinas: 14, grasas: 16, grasasSaturadas: 3, carbohidratos: 58, azucares: 1, fibra: 22, sal: 0.2 } },
+  { nombre: "Cilantro seco", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 298, proteinas: 12, grasas: 17, grasasSaturadas: 0.99, carbohidratos: 55, azucares: 0, fibra: 42, sal: 0 } },
+  { nombre: "Cilantro fresco", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 23, proteinas: 2.1, grasas: 0.5, grasasSaturadas: 0, carbohidratos: 3.7, azucares: 0.9, fibra: 2.8, sal: 0 } },
+  { nombre: "Perejil fresco", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 36, proteinas: 3, grasas: 0.8, grasasSaturadas: 0, carbohidratos: 6.3, azucares: 0.9, fibra: 3.3, sal: 0.1 } },
+  { nombre: "Perejil seco", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 292, proteinas: 26, grasas: 5.5, grasasSaturadas: 0.9, carbohidratos: 50, azucares: 7.3, fibra: 33, sal: 0.5 } },
+  { nombre: "Eneldo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 43, proteinas: 3.5, grasas: 1.1, grasasSaturadas: 0.1, carbohidratos: 7, azucares: 0, fibra: 2.1, sal: 0 } },
+  { nombre: "Cebollino", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 30, proteinas: 3.3, grasas: 0.7, grasasSaturadas: 0.1, carbohidratos: 4.4, azucares: 1.9, fibra: 2.5, sal: 0 } },
+  { nombre: "Estragón", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 295, proteinas: 23, grasas: 7.2, grasasSaturadas: 1.9, carbohidratos: 50, azucares: 1.9, fibra: 7.4, sal: 0.1 } },
+  { nombre: "Salvia", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 315, proteinas: 11, grasas: 13, grasasSaturadas: 7, carbohidratos: 61, azucares: 1.7, fibra: 40, sal: 0 } },
+  { nombre: "Menta fresca", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 70, proteinas: 3.8, grasas: 0.9, grasasSaturadas: 0.2, carbohidratos: 15, azucares: 0, fibra: 8, sal: 0 } },
+  { nombre: "Hierbabuena", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 70, proteinas: 3.8, grasas: 0.9, grasasSaturadas: 0.2, carbohidratos: 15, azucares: 0, fibra: 8, sal: 0 } },
+  { nombre: "Mejorana", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 271, proteinas: 13, grasas: 7, grasasSaturadas: 1.8, carbohidratos: 61, azucares: 4.1, fibra: 40, sal: 0 } },
+  { nombre: "Hinojo semillas", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 345, proteinas: 16, grasas: 15, grasasSaturadas: 0.5, carbohidratos: 52, azucares: 0, fibra: 40, sal: 0 } },
+  { nombre: "Semillas de sésamo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 573, proteinas: 17, grasas: 50, grasasSaturadas: 7, carbohidratos: 23, azucares: 0.3, fibra: 11.8, sal: 0 } },
+  { nombre: "Semillas de chía", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 486, proteinas: 17, grasas: 31, grasasSaturadas: 3.3, carbohidratos: 42, azucares: 0, fibra: 34, sal: 0 } },
+  { nombre: "Semillas de lino", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 534, proteinas: 18, grasas: 42, grasasSaturadas: 3.7, carbohidratos: 29, azucares: 1.6, fibra: 27, sal: 0 } },
+  { nombre: "Semillas de amapola", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 525, proteinas: 18, grasas: 42, grasasSaturadas: 4.5, carbohidratos: 28, azucares: 2.9, fibra: 20, sal: 0 } },
+  { nombre: "Mostaza en polvo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 508, proteinas: 26, grasas: 36, grasasSaturadas: 2, carbohidratos: 35, azucares: 6.8, fibra: 13, sal: 0.1 } },
+  { nombre: "Páprika", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 282, proteinas: 14, grasas: 13, grasasSaturadas: 2.1, carbohidratos: 54, azucares: 10, fibra: 34, sal: 0.1 } },
+  { nombre: "Cayena", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 318, proteinas: 12, grasas: 17, grasasSaturadas: 3, carbohidratos: 57, azucares: 10, fibra: 27, sal: 0.1 } },
+  { nombre: "Chile en polvo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 282, proteinas: 13, grasas: 14, grasasSaturadas: 2.4, carbohidratos: 50, azucares: 7.2, fibra: 29, sal: 0.2 } },
+  { nombre: "Guindilla", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 40, proteinas: 1.9, grasas: 0.4, grasasSaturadas: 0, carbohidratos: 9, azucares: 5.3, fibra: 1.5, sal: 0 } },
+  { nombre: "Pimienta de cayena", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 318, proteinas: 12, grasas: 17, grasasSaturadas: 3, carbohidratos: 57, azucares: 10, fibra: 27, sal: 0.1 } },
+  { nombre: "Anís estrellado", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 337, proteinas: 18, grasas: 16, grasasSaturadas: 0, carbohidratos: 50, azucares: 0, fibra: 15, sal: 0 } },
+  { nombre: "Anís en grano", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 337, proteinas: 18, grasas: 16, grasasSaturadas: 0, carbohidratos: 50, azucares: 0, fibra: 15, sal: 0 } },
+  { nombre: "Vainilla en vaina", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 288, proteinas: 0.1, grasas: 0.1, grasasSaturadas: 0, carbohidratos: 13, azucares: 13, fibra: 0, sal: 0 } },
+  { nombre: "Extracto de vainilla", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 288, proteinas: 0.1, grasas: 0.1, grasasSaturadas: 0, carbohidratos: 13, azucares: 13, fibra: 0, sal: 0 } },
+  { nombre: "Levadura de hornear", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 53, proteinas: 5.1, grasas: 0.2, grasasSaturadas: 0, carbohidratos: 28, azucares: 0, fibra: 0, sal: 11.8 } },
+  { nombre: "Bicarbonato de sodio", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 0, proteinas: 0, grasas: 0, grasasSaturadas: 0, carbohidratos: 0, azucares: 0, fibra: 0, sal: 27.4 } },
+  { nombre: "Vinagre de vino", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 19, proteinas: 0, grasas: 0, grasasSaturadas: 0, carbohidratos: 0.6, azucares: 0.6, fibra: 0, sal: 0 } },
+  { nombre: "Vinagre de manzana", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 22, proteinas: 0, grasas: 0, grasasSaturadas: 0, carbohidratos: 0.9, azucares: 0.4, fibra: 0, sal: 0 } },
+  { nombre: "Vinagre balsámico", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 88, proteinas: 0.5, grasas: 0, grasasSaturadas: 0, carbohidratos: 17, azucares: 15, fibra: 0, sal: 0 } },
+  { nombre: "Salsa de soja", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 53, proteinas: 8.1, grasas: 0.1, grasasSaturadas: 0, carbohidratos: 5, azucares: 1.7, fibra: 0.8, sal: 14.9 } },
+  { nombre: "Aceite de sésamo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 884, proteinas: 0, grasas: 100, grasasSaturadas: 14, carbohidratos: 0, azucares: 0, fibra: 0, sal: 0 } },
+  { nombre: "Aceite de coco", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 862, proteinas: 0, grasas: 100, grasasSaturadas: 87, carbohidratos: 0, azucares: 0, fibra: 0, sal: 0 } },
+  { nombre: "Aceite de girasol", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 884, proteinas: 0, grasas: 100, grasasSaturadas: 10, carbohidratos: 0, azucares: 0, fibra: 0, sal: 0 } },
+  { nombre: "Mantequilla", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 717, proteinas: 0.9, grasas: 81, grasasSaturadas: 51, carbohidratos: 0.1, azucares: 0.1, fibra: 0, sal: 0.6 } },
+  { nombre: "Tahini", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 595, proteinas: 17, grasas: 54, grasasSaturadas: 7.6, carbohidratos: 21, azucares: 0.5, fibra: 9.3, sal: 0 } },
+  { nombre: "Miso", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 199, proteinas: 12, grasas: 6, grasasSaturadas: 1.1, carbohidratos: 27, azucares: 6.2, fibra: 5.4, sal: 12.4 } },
+  { nombre: "Salsa Worcestershire", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 78, proteinas: 2.6, grasas: 0.1, grasasSaturadas: 0, carbohidratos: 19, azucares: 17, fibra: 0, sal: 4.6 } },
+  { nombre: "Concentrado de tomate", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 82, proteinas: 4.3, grasas: 0.5, grasasSaturadas: 0.1, carbohidratos: 18, azucares: 12, fibra: 4.1, sal: 0.1 } },
+  { nombre: "Caldo de pollo", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 15, proteinas: 0.5, grasas: 0.3, grasasSaturadas: 0.1, carbohidratos: 1.4, azucares: 0.4, fibra: 0, sal: 0.5 } },
+  { nombre: "Caldo de verduras", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 7, proteinas: 0.4, grasas: 0.1, grasasSaturadas: 0, carbohidratos: 1.2, azucares: 0.3, fibra: 0, sal: 0.3 } },
+  { nombre: "Caldo de carne", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 17, proteinas: 1.1, grasas: 0.5, grasasSaturadas: 0.2, carbohidratos: 1.7, azucares: 0.4, fibra: 0, sal: 0.5 } },
+  { nombre: "Levadura nutricional", marca: "Natural", supermercado: "Cualquier mercado", nutrientes: { calorias: 325, proteinas: 50, grasas: 5, grasasSaturadas: 0.7, carbohidratos: 38, azucares: 0.5, fibra: 26, sal: 0.1 } },
 ];
 
-async function getCached(query: string): Promise<Producto[] | null> {
-  try {
-    const raw = await AsyncStorage.getItem(`${SEARCH_CACHE_KEY}_${query}`);
-    if (!raw) return null;
-    const { data, ts } = JSON.parse(raw);
-    if (Date.now() - ts > CACHE_TTL) return null;
-    return data;
-  } catch { return null; }
+// Cache en memoria de sesión: instantáneo, sin I/O a disco
+const _memCache = new Map<string, { data: Producto[]; ts: number }>();
+const MEM_CACHE_TTL = 1000 * 60 * 30; // 30 min
+const PERSISTENT_CACHE_KEY = "nutri_search_pcache_v1";
+const PERSISTENT_CACHE_MAX = 20;
+
+function getMemCached(q: string): Producto[] | null {
+  const e = _memCache.get(q);
+  if (!e) return null;
+  if (Date.now() - e.ts > MEM_CACHE_TTL) { _memCache.delete(q); return null; }
+  return e.data;
 }
 
-async function setCached(query: string, productos: Producto[]) {
+function setMemCached(q: string, data: Producto[]) {
+  if (_memCache.size >= 200) {
+    const oldest = _memCache.keys().next().value;
+    if (oldest) _memCache.delete(oldest);
+  }
+  _memCache.set(q, { data, ts: Date.now() });
+  // Persist las últimas PERSISTENT_CACHE_MAX búsquedas a disco (no bloqueante)
+  _persistCache();
+}
+
+function _persistCache() {
   try {
-    await AsyncStorage.setItem(
-      `${SEARCH_CACHE_KEY}_${query}`,
-      JSON.stringify({ data: productos, ts: Date.now() })
-    );
+    const entries = Array.from(_memCache.entries())
+      .sort((a, b) => b[1].ts - a[1].ts)
+      .slice(0, PERSISTENT_CACHE_MAX);
+    const obj = Object.fromEntries(entries);
+    AsyncStorage.setItem(PERSISTENT_CACHE_KEY, JSON.stringify(obj)).catch(() => {});
   } catch {}
 }
 
+export async function cargarCachePersistente() {
+  try {
+    const raw = await AsyncStorage.getItem(PERSISTENT_CACHE_KEY);
+    if (!raw) return;
+    const saved: Record<string, { data: Producto[]; ts: number }> = JSON.parse(raw);
+    const now = Date.now();
+    for (const [q, entry] of Object.entries(saved)) {
+      if (!_memCache.has(q) && now - entry.ts < MEM_CACHE_TTL) {
+        _memCache.set(q, entry);
+      }
+    }
+  } catch {}
+}
+
+// Mapa de términos en otros idiomas → nombre español equivalente
+// Permite buscar "apple" y encontrar "Manzana", "chicken" y encontrar "Pechuga de pollo", etc.
+const FOOD_ALIASES: Record<string, string> = {
+  // EN
+  apple:"manzana",banana:"plátano",orange:"naranja",pear:"pera",strawberry:"fresa",grape:"uva",watermelon:"sandía",melon:"melón",peach:"melocotón",kiwi:"kiwi",mango:"mango",pineapple:"piña","chicken breast":"pechuga de pollo","turkey breast":"pechuga de pavo",beef:"ternera",salmon:"salmón",tuna:"atún",hake:"merluza",egg:"huevo","whole milk":"leche entera","natural yogurt":"yogur natural",oats:"avena",rice:"arroz","white rice":"arroz","brown rice":"arroz integral",bread:"pan","whole wheat bread":"pan integral",pasta:"pasta",potato:"patata","sweet potato":"boniato",lettuce:"lechuga",tomato:"tomate",cucumber:"pepino",carrot:"zanahoria",onion:"cebolla",garlic:"ajo",pepper:"pimiento",spinach:"espinacas",broccoli:"brócoli",lentils:"lentejas",chickpeas:"garbanzos","black beans":"frijoles negros","olive oil":"aceite de oliva","sunflower oil":"aceite de girasol",butter:"mantequilla",cheese:"queso","cream cheese":"queso crema",ham:"jamón cocido","cured ham":"jamón serrano",tuna:"atún en lata","protein powder":"proteína en polvo",oatmeal:"avena",
+  // FR
+  pomme:"manzana",banane:"plátano","poulet":"pechuga de pollo",riz:"arroz",pain:"pan",oeuf:"huevo",lait:"leche entera",yaourt:"yogur natural","pomme de terre":"patata",tomate:"tomate",carotte:"zanahoria",concombre:"pepino","épinards":"espinacas",
+  // DE
+  apfel:"manzana",banane:"plátano",huhn:"pechuga de pollo",reis:"arroz",brot:"pan",ei:"huevo",milch:"leche entera",joghurt:"yogur natural",kartoffel:"patata",tomate:"tomate",karotte:"zanahoria",gurke:"pepino",
+  // PT
+  maçã:"manzana",frango:"pechuga de pollo",arroz:"arroz",pão:"pan",ovo:"huevo",leite:"leche entera",iogurte:"yogur natural",batata:"patata",tomate:"tomate",cenoura:"zanahoria",
+  // IT
+  mela:"manzana",pollo:"pechuga de pollo",riso:"arroz",pane:"pan",uovo:"huevo",latte:"leche entera",yogurt:"yogur natural",patata:"patata",pomodoro:"tomate",carota:"zanahoria",
+  // ── Especias EN ──
+  salt:"sal",pepper:"pimienta negra","black pepper":"pimienta negra","white pepper":"pimienta blanca",paprika:"pimentón dulce","smoked paprika":"pimentón ahumado","hot paprika":"pimentón picante",cumin:"comino",oregano:"orégano",basil:"albahaca seca","fresh basil":"albahaca fresca",rosemary:"romero",thyme:"tomillo","bay leaf":"laurel","bay leaves":"laurel",cinnamon:"canela",turmeric:"cúrcuma",ginger:"jengibre en polvo","fresh ginger":"jengibre fresco",saffron:"azafrán","nutmeg":"nuez moscada",clove:"clavo",cloves:"clavo",cardamom:"cardamomo",curry:"curry en polvo","curry powder":"curry en polvo","garam masala":"garam masala",coriander:"cilantro seco","fresh coriander":"cilantro fresco","fresh cilantro":"cilantro fresco",cilantro:"cilantro fresco",parsley:"perejil fresco","dried parsley":"perejil seco",dill:"eneldo",chives:"cebollino",tarragon:"estragón",sage:"salvia",mint:"menta fresca",spearmint:"hierbabuena",marjoram:"mejorana","fennel seeds":"hinojo semillas","sesame seeds":"semillas de sésamo","chia seeds":"semillas de chía","flax seeds":"semillas de lino","poppy seeds":"semillas de amapola","mustard powder":"mostaza en polvo",cayenne:"cayena","chili powder":"chile en polvo","star anise":"anís estrellado","anise seeds":"anís en grano",vanilla:"extracto de vainilla","vanilla extract":"extracto de vainilla","baking powder":"levadura de hornear","baking soda":"bicarbonato de sodio","wine vinegar":"vinagre de vino","apple cider vinegar":"vinagre de manzana","balsamic vinegar":"vinagre balsámico","soy sauce":"salsa de soja","sesame oil":"aceite de sésamo","coconut oil":"aceite de coco","sunflower oil":"aceite de girasol",butter:"mantequilla",tahini:"tahini",miso:"miso","worcestershire sauce":"salsa Worcestershire","tomato paste":"concentrado de tomate","chicken broth":"caldo de pollo","vegetable broth":"caldo de verduras","beef broth":"caldo de carne","nutritional yeast":"levadura nutricional",
+  // ── Especias FR ──
+  sel:"sal",poivre:"pimienta negra","poivre noir":"pimienta negra",paprika:"pimentón dulce",cumin:"comino",origan:"orégano",basilic:"albahaca seca",romarin:"romero",thym:"tomillo","feuille de laurier":"laurel",cannelle:"canela",curcuma:"cúrcuma",gingembre:"jengibre en polvo",safran:"azafrán","noix de muscade":"nuez moscada",girofle:"clavo",cardamome:"cardamomo","curry en poudre":"curry en polvo",coriandre:"cilantro fresco",persil:"perejil fresco",aneth:"eneldo",ciboulette:"cebollino",estragon:"estragón",sauge:"salvia",menthe:"menta fresca",marjolaine:"mejorana","graines de sésame":"semillas de sésamo","graines de chia":"semillas de chía",vanille:"extracto de vainilla","levure chimique":"levadura de hornear","bicarbonate de soude":"bicarbonato de sodio","vinaigre de vin":"vinagre de vino","sauce soja":"salsa de soja",beurre:"mantequilla",
+  // ── Especias DE ──
+  salz:"sal",pfeffer:"pimienta negra",paprika:"pimentón dulce",kumin:"comino",oregano:"orégano",basilikum:"albahaca seca",rosmarin:"romero",thymian:"tomillo",lorbeer:"laurel",zimt:"canela",kurkuma:"cúrcuma",ingwer:"jengibre en polvo",safran:"azafrán",muskatnuss:"nuez moscada",nelken:"clavo",kardamom:"cardamomo",koriander:"cilantro fresco",petersilie:"perejil fresco",dill:"eneldo",schnittlauch:"cebollino",estragon:"estragón",salbei:"salvia",minze:"menta fresca",majoran:"mejorana",vanille:"extracto de vainilla",backpulver:"levadura de hornear",natron:"bicarbonato de sodio",butter:"mantequilla",
+  // ── Especias IT ──
+  sale:"sal","pepe nero":"pimienta negra",paprica:"pimentón dulce",cumino:"comino",origano:"orégano",basilico:"albahaca seca",rosmarino:"romero",timo:"tomillo",alloro:"laurel",cannella:"canela",curcuma:"cúrcuma",zenzero:"jengibre en polvo",zafferano:"azafrán","noce moscata":"nuez moscada",chiodo:"clavo",cardamomo:"cardamomo",coriandolo:"cilantro fresco",prezzemolo:"perejil fresco",aneto:"eneldo",erba:"cebollino",dragoncello:"estragón",salvia:"salvia",menta:"menta fresca",maggiorana:"mejorana",vaniglia:"extracto de vainilla",burro:"mantequilla",
+  // ── Especias PT ──
+  sal:"sal","pimenta preta":"pimienta negra",páprica:"pimentón dulce",cominho:"comino",orégano:"orégano",manjericão:"albahaca seca",alecrim:"romero",tomilho:"tomillo",louro:"laurel",canela:"canela",açafrão:"azafrán","noz moscada":"nuez moscada",cravo:"clavo",coentro:"cilantro fresco",salsa:"perejil fresco",endro:"eneldo",cebolinho:"cebollino",estragão:"estragón",sálvia:"salvia",hortelã:"menta fresca",manjerona:"mejorana",baunilha:"extracto de vainilla",manteiga:"mantequilla",
+  // ── Especias árabe / marroquí ──
+  "ras el hanout":"garam masala",harissa:"cayena","za'atar":"orégano",zaatar:"orégano",sumac:"pimentón dulce",
+  // RU / others phonetic omitted for brevity
+};
+
+// Supermercados conocidos (en minúsculas) para detectarlos en la búsqueda
+const SUPER_KEYS = Object.keys(SUPER_COLORS).map(s => s.toLowerCase());
+
+function parseQuery(texto: string): { nameTokens: string[]; superTokens: string[] } {
+  const tokens = texto.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const superTokens: string[] = [];
+  const nameTokens: string[] = [];
+  for (const t of tokens) {
+    const esSuperToken = SUPER_KEYS.some(s => s === t || (t.length >= 4 && s.startsWith(t)));
+    if (esSuperToken) superTokens.push(t);
+    else nameTokens.push(t);
+  }
+  return { nameTokens, superTokens };
+}
+
 function buscarEnLocal(texto: string): Producto[] {
-  const q = texto.toLowerCase();
-  return ALIMENTOS_BASICOS.filter((a) => a.nombre.toLowerCase().includes(q));
+  const { nameTokens, superTokens } = parseQuery(texto);
+  if (!nameTokens.length && !superTokens.length) return [];
+  return ALIMENTOS_BASICOS.filter((a) => {
+    const nombreL = a.nombre.toLowerCase();
+    const superL = (a.supermercado ?? "").toLowerCase();
+    const marcaL = (a.marca ?? "").toLowerCase();
+    // Todos los tokens deben coincidir en nombre O marca (permite buscar "arroz hacendado")
+    const nameMatch = nameTokens.length === 0 || nameTokens.every(t => {
+      const alias = FOOD_ALIASES[t];
+      return nombreL.includes(t) || marcaL.includes(t) || (alias ? nombreL.includes(alias.toLowerCase()) : false);
+    });
+    // Al menos un token de super debe coincidir en supermercado o marca
+    const superMatch = superTokens.length === 0 || superTokens.some(t =>
+      superL.includes(t) || marcaL.includes(t)
+    );
+    return nameMatch && superMatch;
+  });
 }
 
 async function registrarEnHistorial(prod: Producto): Promise<RecentFood[]> {
@@ -131,6 +357,7 @@ async function registrarEnHistorial(prod: Producto): Promise<RecentFood[]> {
     const filtrada = lista.filter((f) => f.nombre.toLowerCase() !== prod.nombre.toLowerCase());
     const actualizada = [nueva, ...filtrada].slice(0, 50);
     await AsyncStorage.setItem(RECENT_FOODS_KEY, JSON.stringify(actualizada));
+    upsertRecienteCloud(nueva).catch(() => {});
     return actualizada;
   } catch { return []; }
 }
@@ -138,7 +365,9 @@ async function registrarEnHistorial(prod: Producto): Promise<RecentFood[]> {
 async function cargarFavoritosStorage(): Promise<FavoriteFood[]> {
   try {
     const stored = await AsyncStorage.getItem(FAVORITES_KEY);
-    return stored ? JSON.parse(stored) : [];
+    if (!stored) return [];
+    const parsed: any[] = JSON.parse(stored);
+    return parsed.map(f => ({ ...normalizarProducto(f), savedAt: f.savedAt }));
   } catch { return []; }
 }
 
@@ -148,16 +377,123 @@ async function toggleFavoritoStorage(prod: Producto): Promise<FavoriteFood[]> {
   let nueva: FavoriteFood[];
   if (existe) {
     nueva = lista.filter((f) => f.nombre.toLowerCase() !== prod.nombre.toLowerCase());
+    deleteFavCloud(prod.nombre).catch(() => {});
   } else {
-    nueva = [{ ...prod, savedAt: Date.now() }, ...lista];
+    const fav: FavoriteFood = { ...prod, savedAt: Date.now() };
+    nueva = [fav, ...lista];
+    upsertFavCloud(fav).catch(() => {});
   }
   await AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(nueva));
   return nueva;
 }
 
+// ── Cloud sync helpers ────────────────────────────────────────────────────────
+async function getUid(): Promise<string | null> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.user?.id ?? null;
+  } catch { return null; }
+}
+
+async function upsertFavCloud(fav: FavoriteFood) {
+  const uid = await getUid(); if (!uid) return;
+  await supabase.from("alimentos_favoritos").upsert(
+    { user_id: uid, nombre: fav.nombre, producto_data: fav, saved_at: fav.savedAt },
+    { onConflict: "user_id,nombre" }
+  );
+}
+
+async function deleteFavCloud(nombre: string) {
+  const uid = await getUid(); if (!uid) return;
+  await supabase.from("alimentos_favoritos").delete()
+    .eq("user_id", uid).eq("nombre", nombre);
+}
+
+async function upsertRecienteCloud(rec: RecentFood) {
+  const uid = await getUid(); if (!uid) return;
+  await supabase.from("alimentos_recientes").upsert(
+    { user_id: uid, nombre: rec.nombre, producto_data: rec, added_at: rec.addedAt },
+    { onConflict: "user_id,nombre" }
+  );
+}
+
+async function clearRecientesCloud() {
+  const uid = await getUid(); if (!uid) return;
+  await supabase.from("alimentos_recientes").delete().eq("user_id", uid);
+}
+
+async function loadFavsCloud(): Promise<FavoriteFood[]> {
+  const uid = await getUid(); if (!uid) return [];
+  const { data } = await supabase.from("alimentos_favoritos")
+    .select("producto_data").eq("user_id", uid)
+    .order("saved_at", { ascending: false }).limit(200);
+  return (data ?? []).map((r: any) => r.producto_data as FavoriteFood);
+}
+
+async function loadRecientesCloud(): Promise<RecentFood[]> {
+  const uid = await getUid(); if (!uid) return [];
+  const { data } = await supabase.from("alimentos_recientes")
+    .select("producto_data").eq("user_id", uid)
+    .order("added_at", { ascending: false }).limit(50);
+  return (data ?? []).map((r: any) => r.producto_data as RecentFood);
+}
+
+function mergeRecientes(a: RecentFood[], b: RecentFood[]): RecentFood[] {
+  const map = new Map<string, RecentFood>();
+  for (const f of [...a, ...b]) {
+    const k = f.nombre.toLowerCase();
+    const ex = map.get(k);
+    if (!ex || f.addedAt > ex.addedAt) map.set(k, f);
+  }
+  return Array.from(map.values()).sort((x, y) => y.addedAt - x.addedAt).slice(0, 50);
+}
+
+function mergeFavs(a: FavoriteFood[], b: FavoriteFood[]): FavoriteFood[] {
+  const map = new Map<string, FavoriteFood>();
+  for (const f of [...a, ...b]) {
+    const k = f.nombre.toLowerCase();
+    const ex = map.get(k);
+    if (!ex || f.savedAt > ex.savedAt) map.set(k, f);
+  }
+  return Array.from(map.values()).sort((x, y) => y.savedAt - x.savedAt);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function safeNutriente(val: any): number {
   const n = Number(val);
   return isNaN(n) ? 0 : n;
+}
+
+// Mapea marca/nombre de marca al nombre del supermercado
+const MARCA_A_SUPER: Array<[string, string]> = [
+  ["hacendado", "Mercadona"], ["mercadona", "Mercadona"],
+  ["carrefour", "Carrefour"],
+  ["lidl", "Lidl"],
+  ["aldi", "Aldi"],
+  ["dia%", "DIA"], [" dia ", "DIA"],
+  ["alcampo", "Alcampo"],
+  ["eroski", "Eroski"],
+  ["consum", "Consum"],
+  ["simply", "Simply"],
+  ["hipercor", "Hipercor"],
+  ["el corte ingl", "El Corte Inglés"],
+  ["caprabo", "Caprabo"],
+  ["ahorramas", "Ahorramas"],
+  ["gadis", "Gadis"],
+  ["spar", "Spar"],
+  ["coviran", "Covirán"],
+  ["bonpreu", "Bonpreu"],
+  ["condis", "Condis"],
+  ["auchan", "Alcampo"],
+  ["continente", "Carrefour"],
+];
+function marcaASupermercado(marca: string): string | null {
+  if (!marca || marca === "Sin marca") return null;
+  const m = ` ${marca.toLowerCase().trim()} `;
+  for (const [key, val] of MARCA_A_SUPER) {
+    if (m.includes(key)) return val;
+  }
+  return null;
 }
 
 function normalizarProducto(prod: any): Producto {
@@ -168,8 +504,13 @@ function normalizarProducto(prod: any): Producto {
     };
   }
   if (prod.nutrientes && typeof prod.nutrientes === "object") {
+    const superRaw2 = prod.supermercado ?? "Desconocido";
+    const superFinal2 = (superRaw2 === "Cualquier mercado" || superRaw2 === "Marca desconocida" || superRaw2 === "Desconocido")
+      ? (marcaASupermercado(prod.marca ?? "") ?? superRaw2)
+      : superRaw2;
     return {
       ...prod,
+      supermercado: superFinal2,
       porciones: Array.isArray(prod.porciones) ? prod.porciones : undefined,
       nutrientes: {
         calorias: safeNutriente(prod.nutrientes.calorias),
@@ -183,12 +524,18 @@ function normalizarProducto(prod: any): Producto {
       },
     };
   }
+  const marcaRaw = prod.marca ?? "Sin marca";
+  const superRaw = prod.supermercado ?? "Desconocido";
+  const superFinal = (superRaw === "Cualquier mercado" || superRaw === "Marca desconocida" || superRaw === "Desconocido")
+    ? (marcaASupermercado(marcaRaw) ?? superRaw)
+    : superRaw;
   return {
     nombre: prod.nombre ?? "",
-    marca: prod.marca ?? "Sin marca",
-    supermercado: prod.supermercado ?? "Desconocido",
+    marca: marcaRaw,
+    supermercado: superFinal,
     esPersonalizado: prod.esPersonalizado ?? false,
     pesoEnvase: prod.pesoEnvase ?? prod.peso_envase,
+    nombreUnidadEnvase: prod.nombreUnidadEnvase ?? prod.nombre_unidad_envase,
     porciones: Array.isArray(prod.porciones) ? prod.porciones : undefined,
     nutrientes: {
       calorias: safeNutriente(prod.calorias),
@@ -203,55 +550,33 @@ function normalizarProducto(prod: any): Producto {
   };
 }
 
-function SwipeableFoodItem({
-  prod: prodRaw, isFav, onSelect, onToggleFav, colors: c,
+const SwipeableFoodItem = memo(function SwipeableFoodItem({
+  prod, isFav, onSelect, onToggleFav, colors: c, alergias = [],
 }: {
   prod: Producto; isFav: boolean;
-  onSelect: () => void; onToggleFav: () => void; colors: any;
+  onSelect: (p: Producto) => void; onToggleFav: (p: Producto) => void; colors: any; alergias?: string[];
 }) {
-  const prod = normalizarProducto(prodRaw);
-  const sw = makeSwStyles(c);
-  const translateX = useRef(new Animated.Value(0)).current;
-  const [swiped, setSwiped] = useState(false);
+  const { t } = useApp();
+  const sw = useMemo(() => makeSwStyles(c), [c]);
   const sc = SUPER_COLORS[prod.supermercado] || "#4B5563";
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 8 && Math.abs(g.dy) < 20,
-      onPanResponderMove: (_, g) => {
-        if (g.dx < 0) translateX.setValue(Math.max(g.dx, -80));
-      },
-      onPanResponderRelease: (_, g) => {
-        if (g.dx < -40) {
-          Animated.spring(translateX, { toValue: -72, useNativeDriver: nativeDriver }).start();
-          setSwiped(true);
-        } else {
-          Animated.spring(translateX, { toValue: 0, useNativeDriver: nativeDriver }).start();
-          setSwiped(false);
-        }
-      },
-    })
-  ).current;
-
-  const resetSwipe = () => {
-    Animated.spring(translateX, { toValue: 0, useNativeDriver: nativeDriver }).start();
-    setSwiped(false);
-  };
+  const nombreLower = prod.nombre.toLowerCase();
+  const alergenoEncontrado = alergias.find((id) =>
+    (ALERGENOS_KEYWORDS[id] ?? []).some((kw) => nombreLower.includes(kw))
+  );
 
   return (
     <View style={sw.wrap}>
-      <View style={[sw.favBg, isFav && sw.favBgActive]}>
-        <TouchableOpacity style={sw.favBgBtn} onPress={() => { onToggleFav(); resetSwipe(); }}>
-          <Text style={sw.favBgIcon}>{isFav ? "★" : "☆"}</Text>
-          <Text style={sw.favBgText}>{isFav ? "Quitar" : "Guardar"}</Text>
-        </TouchableOpacity>
-      </View>
-      <Animated.View style={[sw.item, { transform: [{ translateX }] }]} {...panResponder.panHandlers}>
-        <TouchableOpacity style={sw.itemInner} onPress={() => { resetSwipe(); onSelect(); }} activeOpacity={0.7}>
+      <View style={sw.item}>
+        <TouchableOpacity style={sw.itemInner} onPress={() => onSelect(prod)} activeOpacity={0.7}>
           <View style={sw.left}>
             <View style={sw.nameRow}>
               <Text style={sw.name} numberOfLines={1}>{prod.nombre}</Text>
-              {prod.esPersonalizado && <View style={sw.customBadge}><Text style={sw.customBadgeText}>✦ propio</Text></View>}
+              {prod.esPersonalizado && <View style={sw.customBadge}><Text style={sw.customBadgeText}>{t.customBadge}</Text></View>}
+              {alergenoEncontrado && (
+                <View style={{ backgroundColor: "#EF444422", borderRadius: 6, paddingHorizontal: 5, paddingVertical: 2, borderWidth: 1, borderColor: "#EF444455" }}>
+                  <Text style={{ color: "#EF4444", fontSize: 11, fontWeight: "700" }}>{t.allergenWarning}</Text>
+                </View>
+              )}
             </View>
             <View style={sw.meta}>
               <View style={[sw.superBadge, { backgroundColor: sc + "22", borderColor: sc + "55" }]}>
@@ -260,25 +585,39 @@ function SwipeableFoodItem({
               {prod.marca !== "Natural" && prod.marca !== "Sin marca" && <Text style={sw.marca}>{prod.marca}</Text>}
             </View>
             <Text style={sw.macros}>
-              P {prod.nutrientes.proteinas.toFixed(1)}g · C {prod.nutrientes.carbohidratos.toFixed(1)}g · G {prod.nutrientes.grasas.toFixed(1)}g
+              {t.proteins[0]} {(prod.nutrientes?.proteinas ?? 0).toFixed(1)}g · {t.carbs[0]} {(prod.nutrientes?.carbohidratos ?? 0).toFixed(1)}g · {t.fats[0]} {(prod.nutrientes?.grasas ?? 0).toFixed(1)}g
             </Text>
           </View>
           <View style={sw.right}>
-            <Text style={sw.kcal}>{prod.nutrientes.calorias.toFixed(0)}</Text>
+            <Text style={sw.kcal}>{(prod.nutrientes?.calorias ?? 0).toFixed(0)}</Text>
             <Text style={sw.kcalUnit}>kcal/100g</Text>
           </View>
         </TouchableOpacity>
-        <TouchableOpacity style={sw.starBtn} onPress={() => { resetSwipe(); onToggleFav(); }}>
+        <TouchableOpacity style={sw.starBtn} onPress={() => onToggleFav(prod)}>
           <Text style={[sw.starIcon, isFav && sw.starIconActive]}>{isFav ? "★" : "☆"}</Text>
         </TouchableOpacity>
-      </Animated.View>
+      </View>
+    </View>
+  );
+});
+
+function SkeletonFoodItem({ colors }: { colors: any }) {
+  const bg = colors.cardBorder + "66";
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 12,
+      paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.cardBorder + "44" }}>
+      <View style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: bg }} />
+      <View style={{ flex: 1, gap: 7 }}>
+        <View style={{ height: 13, backgroundColor: bg, borderRadius: 5, width: "60%" }} />
+        <View style={{ height: 10, backgroundColor: bg, borderRadius: 4, width: "38%" }} />
+      </View>
     </View>
   );
 }
 
 export default function AddFoodScreen() {
-  const { colors, theme } = useApp();
-  const s = makeSStyles(colors);
+  const { colors, theme, t, isOnline } = useApp();
+  const s = useMemo(() => makeSStyles(colors), [colors]);
   const { code, meal: mealParam, storageKey: storageKeyParam } = useLocalSearchParams<{ code?: string; meal?: MealKey; storageKey?: string }>();
 
   function storageKeyToDate(key: string): Date {
@@ -301,52 +640,257 @@ export default function AddFoodScreen() {
   const [resultados, setResultados] = useState<Producto[]>([]);
   const [producto, setProducto] = useState<Producto | null>(null);
   const [gramos, setGramos] = useState("100");
-  const [porcionSeleccionada, setPorcionSeleccionada] = useState<number | null>(null);
-  const [cantidadPorciones, setCantidadPorciones] = useState(1);
+  const [portionLabelFromPicker, setPortionLabelFromPicker] = useState<string | undefined>(undefined);
+  const [porcionUsadaIdx, setPorcionUsadaIdx] = useState<number | null>(null);
+  const [porcionUsadaCantidad, setPorcionUsadaCantidad] = useState<string>("");
   const [mealSeleccionada, setMealSeleccionada] = useState<MealKey>((mealParam as MealKey) || "desayuno");
   const [cargando, setCargando] = useState(false);
   const [guardado, setGuardado] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [recentFoods, setRecentFoods] = useState<RecentFood[]>([]);
   const [favorites, setFavorites] = useState<FavoriteFood[]>([]);
-  const [pesoEnvase, setPesoEnvase] = useState("");
+  const [pesoEnvase, setPesoEnvase]       = useState("");
+  const [nombreEnvase, setNombreEnvase]   = useState("");
   const [mostrarEnvaseManual, setMostrarEnvaseManual] = useState(false);
   // ── VOZ ──────────────────────────────────────────────────────────────────
   const [escuchando, setEscuchando] = useState(false);
   const [codigoNoEncontrado, setCodigoNoEncontrado] = useState<string | null>(null);
+  const [alergias, setAlergias] = useState<string[]>([]);
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const cacheRef = useRef<Record<string, Producto[]>>({});
+  const debounceRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const envaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSearch = useRef("");
+  const scrollRef = useRef<any>(null);
   // Keeps the SpeechRecognition instance alive — Chrome Android GC's local vars before events fire
   const recognitionRef   = useRef<any>(null);
   // MediaRecorder para el fallback Firefox
   const mediaRecorderRef = useRef<any>(null);
 
   useEffect(() => { cargarDatos(); }, []);
+
+  // Recargar recientes cada vez que la pantalla recibe el foco (ej. volver de añadir al día)
+  useFocusEffect(useCallback(() => {
+    AsyncStorage.getItem(RECENT_FOODS_KEY).then(v => {
+      if (v) {
+        const parsed: any[] = JSON.parse(v);
+        setRecentFoods(parsed.map(f => ({ ...normalizarProducto(f), addedAt: f.addedAt })));
+      }
+    }).catch(() => {});
+  }, []));
+
+  // Callbacks estables para que React.memo en SwipeableFoodItem funcione correctamente.
+  // Con la firma (prod: Producto) => void podemos pasarlos sin recrearlos en cada render.
+  const handleSelectItem = useCallback((item: Producto) => { seleccionarProducto(item); }, []);
+  const handleToggleFavItem = useCallback((item: Producto) => { handleToggleFav(item); }, [favorites]);
+
+  // Realtime: sincronizar recientes y favoritos entre dispositivos de la misma cuenta
+  useEffect(() => {
+    let favCh: ReturnType<typeof supabase.channel> | null = null;
+    let recCh: ReturnType<typeof supabase.channel> | null = null;
+    getUid().then(uid => {
+      if (!uid) return;
+      favCh = supabase.channel(`add-food-favs-${uid}`)
+        .on('postgres_changes' as any, {
+          event: '*', schema: 'public', table: 'alimentos_favoritos',
+          filter: `user_id=eq.${uid}`,
+        }, async () => {
+          const cloud = await loadFavsCloud();
+          setFavorites(cloud);
+          AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(cloud)).catch(() => {});
+        })
+        .subscribe();
+      recCh = supabase.channel(`add-food-recs-${uid}`)
+        .on('postgres_changes' as any, {
+          event: '*', schema: 'public', table: 'alimentos_recientes',
+          filter: `user_id=eq.${uid}`,
+        }, async () => {
+          const cloud = await loadRecientesCloud();
+          setRecentFoods(cloud);
+          AsyncStorage.setItem(RECENT_FOODS_KEY, JSON.stringify(cloud)).catch(() => {});
+        })
+        .subscribe();
+    });
+    return () => {
+      if (favCh) supabase.removeChannel(favCh);
+      if (recCh) supabase.removeChannel(recCh);
+    };
+  }, []);
+
   useEffect(() => {
     if (code) { setTab("codigo"); setCodigo(code); cargarPorCodigo(code); }
   }, [code]);
 
   const cargarDatos = async () => {
+    // 0. Cache persistente — restaura búsquedas anteriores antes de cargar nada más
+    cargarCachePersistente().catch(() => {});
+
+    // 1. Local inmediato
+    let recentRaw: string | null = null;
     try {
-      const stored = await AsyncStorage.getItem(RECENT_FOODS_KEY);
-      if (stored) setRecentFoods(JSON.parse(stored));
+      recentRaw = await AsyncStorage.getItem(RECENT_FOODS_KEY);
+      if (recentRaw) {
+        const parsed: any[] = JSON.parse(recentRaw);
+        setRecentFoods(parsed.map(f => ({ ...normalizarProducto(f), addedAt: f.addedAt })));
+      }
     } catch {}
-    const favs = await cargarFavoritosStorage();
-    setFavorites(favs);
+    const favsLocal = await cargarFavoritosStorage();
+    setFavorites(favsLocal);
+    try {
+      const storedAlergias = await AsyncStorage.getItem("nutri_alergias");
+      if (storedAlergias) setAlergias(JSON.parse(storedAlergias));
+    } catch {}
+
+    // 2. Merge con nube en background
+    loadRecientesCloud().then(async cloudRec => {
+      if (!cloudRec.length) return;
+      const localStored = await AsyncStorage.getItem(RECENT_FOODS_KEY).catch(() => null);
+      const local: RecentFood[] = localStored ? JSON.parse(localStored) : [];
+      const merged = mergeRecientes(local, cloudRec);
+      setRecentFoods(merged);
+      AsyncStorage.setItem(RECENT_FOODS_KEY, JSON.stringify(merged)).catch(() => {});
+    }).catch(() => {});
+
+    loadFavsCloud().then(async cloudFavs => {
+      if (!cloudFavs.length) return;
+      const local = await cargarFavoritosStorage();
+      const merged = mergeFavs(local, cloudFavs);
+      setFavorites(merged);
+      AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(merged)).catch(() => {});
+    }).catch(() => {});
+
+    // 3. Prefetch top 5 recientes en background (2s delay para no bloquear arranque)
+    setTimeout(() => {
+      try {
+        const recents: RecentFood[] = recentRaw ? JSON.parse(recentRaw) : [];
+        const top5 = recents.slice(0, 5);
+        for (const rf of top5) {
+          if (getMemCached(rf.nombre)) continue; // ya en cache
+          const { principal, alternativas } = preprocesarQuery(rf.nombre);
+          buscarAlimentosPersonalizados(principal, PAIS_USUARIO, alternativas)
+            .then(deBD => {
+              if (!deBD.length) return;
+              const prods = deBD.map(p => ({ ...normalizarProducto(p), esPersonalizado: true, scanCount: p.scan_count ?? 0 }));
+              setMemCached(rf.nombre, rankear(rf.nombre, prods));
+            }).catch(() => {});
+        }
+      } catch {}
+    }, 2000);
   };
 
-  const isFav = (nombre: string) =>
-    favorites.some((f) => f.nombre.toLowerCase() === nombre.toLowerCase());
+  const favSet = useMemo(
+    () => new Set(favorites.map((f) => f.nombre.toLowerCase())),
+    [favorites]
+  );
+  const isFav = useCallback((nombre: string) => favSet.has(nombre.toLowerCase()), [favSet]);
 
   const handleToggleFav = async (prod: Producto) => {
     const nueva = await toggleFavoritoStorage(prod);
     setFavorites(nueva);
   };
 
-  const resetEnvase = () => { setMostrarEnvaseManual(false); setPesoEnvase(""); };
-  const resetPorcion = () => { setPorcionSeleccionada(null); setCantidadPorciones(1); };
+  const resetEnvase = () => { setMostrarEnvaseManual(false); setPesoEnvase(""); setNombreEnvase(""); };
+  const resetPorcion = () => { setPortionLabelFromPicker(undefined); };
+
+  // Auto-guardar envase en AsyncStorage + Supabase cuando el usuario lo escribe
+  useEffect(() => {
+    if (!producto || producto.pesoEnvase) return;
+    if (envaseTimerRef.current) clearTimeout(envaseTimerRef.current);
+    if (!pesoEnvase || Number(pesoEnvase) <= 0) return;
+    envaseTimerRef.current = setTimeout(async () => {
+      const cacheId = producto.codigoBarras || producto.nombre;
+      // Local (este dispositivo)
+      AsyncStorage.setItem(ENVASE_CACHE_KEY(cacheId), pesoEnvase).catch(() => {});
+      if (nombreEnvase.trim()) {
+        AsyncStorage.setItem(ENVASE_NOMBRE_CACHE_KEY(cacheId), nombreEnvase.trim()).catch(() => {});
+      }
+      // Cloud (todos los usuarios) — por código de barras si existe, si no por nombre
+      if (producto.codigoBarras) {
+        try {
+          const patchFields: Record<string, any> = { peso_envase: Number(pesoEnvase) };
+          if (nombreEnvase.trim()) patchFields.nombre_unidad_envase = nombreEnvase.trim();
+          const { data: rows } = await supabase
+            .from("alimentos_personalizados")
+            .update(patchFields)
+            .eq("codigo_barras", producto.codigoBarras)
+            .select("id");
+          if (!rows || rows.length === 0) {
+            await supabase.from("alimentos_personalizados").insert({
+              nombre: producto.nombre,
+              marca: producto.marca,
+              supermercado: producto.supermercado,
+              calorias: producto.nutrientes.calorias,
+              proteinas: producto.nutrientes.proteinas,
+              grasas: producto.nutrientes.grasas,
+              grasas_saturadas: producto.nutrientes.grasasSaturadas,
+              carbohidratos: producto.nutrientes.carbohidratos,
+              azucares: producto.nutrientes.azucares,
+              fibra: producto.nutrientes.fibra,
+              sal: producto.nutrientes.sal,
+              codigo_barras: producto.codigoBarras,
+              es_compartido: true,
+              ...patchFields,
+            });
+          }
+        } catch {}
+      } else {
+        // Sin código de barras: actualizar/insertar por nombre
+        try {
+          const patchFields: Record<string, any> = { peso_envase: Number(pesoEnvase) };
+          if (nombreEnvase.trim()) patchFields.nombre_unidad_envase = nombreEnvase.trim();
+          const { data: rows } = await supabase
+            .from("alimentos_personalizados")
+            .update(patchFields)
+            .ilike("nombre", producto.nombre)
+            .select("id");
+          if (!rows || rows.length === 0) {
+            await supabase.from("alimentos_personalizados").insert({
+              nombre: producto.nombre,
+              marca: producto.marca,
+              supermercado: producto.supermercado,
+              calorias: producto.nutrientes.calorias,
+              proteinas: producto.nutrientes.proteinas,
+              grasas: producto.nutrientes.grasas,
+              grasas_saturadas: producto.nutrientes.grasasSaturadas,
+              carbohidratos: producto.nutrientes.carbohidratos,
+              azucares: producto.nutrientes.azucares,
+              fibra: producto.nutrientes.fibra,
+              sal: producto.nutrientes.sal,
+              es_compartido: true,
+              ...patchFields,
+            });
+          }
+        } catch {}
+      }
+    }, 1200);
+    return () => { if (envaseTimerRef.current) clearTimeout(envaseTimerRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pesoEnvase, nombreEnvase, producto?.codigoBarras, producto?.nombre, producto?.pesoEnvase]);
+
+  // Suscripción en tiempo real: si otro usuario guarda peso/nombre de envase para este producto, se muestra aquí
+  useEffect(() => {
+    if (!producto || producto.pesoEnvase) return;
+    const channel = supabase
+      .channel(`envase-rt-${producto.nombre.replace(/\s+/g, '-')}`)
+      .on('postgres_changes' as any, {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'alimentos_personalizados',
+      }, (payload: any) => {
+        const row = payload.new;
+        if (!row.peso_envase) return;
+        const match = producto.codigoBarras
+          ? row.codigo_barras === producto.codigoBarras
+          : row.nombre?.toLowerCase() === producto.nombre.toLowerCase();
+        if (match) {
+          const envaseStr = String(row.peso_envase);
+          setPesoEnvase(envaseStr);
+          setMostrarEnvaseManual(true);
+          if (row.nombre_unidad_envase) setNombreEnvase(row.nombre_unidad_envase);
+        }
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [producto?.nombre, producto?.codigoBarras, producto?.pesoEnvase]);
 
   const macros = producto ? calcularMacros(producto.nutrientes, Number(gramos) || 0) : null;
   const caloriasCalculadas = macros ? macros.calorias.toFixed(0) : "0";
@@ -357,63 +901,73 @@ export default function AddFoodScreen() {
     setProducto(null);
     currentSearch.current = texto;
     if (debounceRef.current) clearTimeout(debounceRef.current);
+
     if (!texto.trim()) { setResultados([]); setCargando(false); return; }
 
-    const locales = buscarEnLocal(texto);
-    setResultados(locales);
+    // 1. Cache en memoria — instantáneo si ya se buscó antes en esta sesión
+    const cached = getMemCached(texto);
+    if (cached) { setResultados(cached); setCargando(false); return; }
+
+    // 2. Locales hardcoded — inmediato mientras carga BD
+    // Solo reemplaza si hay locales relevantes; si no, mantiene resultados anteriores
+    const locales = rankear(texto, ALIMENTOS_BASICOS);
+    if (locales.length > 0) setResultados(locales);
     setCargando(true);
-
-    if (cacheRef.current[texto]) {
-      setResultados(cacheRef.current[texto]);
-      setCargando(false);
-      return;
-    }
-
-    getCached(texto).then((cached) => {
-      if (cached && currentSearch.current === texto) {
-        cacheRef.current[texto] = cached;
-        setResultados(cached);
-        setCargando(false);
-      }
-    });
-
-    let personalizadosRef: Producto[] = [];
-
-    buscarAlimentosPersonalizados(texto).then((personalizados) => {
-      if (currentSearch.current !== texto) return;
-      personalizadosRef = personalizados.map((p) => normalizarProducto(p));
-      if (personalizadosRef.length > 0) {
-        setResultados((prev) => {
-          const nuevos = personalizadosRef.filter(
-            (c) => !prev.some((p) => p.nombre.toLowerCase() === c.nombre.toLowerCase())
-          );
-          return [...nuevos, ...prev];
-        });
-      }
-    }).catch(() => {});
 
     debounceRef.current = setTimeout(async () => {
       if (currentSearch.current !== texto) return;
+
+      // Buscar siempre con el texto exacto que escribió el usuario (sin corrección ni sinónimos)
+      // para que "pollo" devuelva solo alimentos que contienen "pollo", nada más.
+
+      // 3. D1/Supabase — búsqueda por texto literal del usuario
       try {
-        const remotos = await buscarProductosPorNombre(texto);
-        const localesFinal = buscarEnLocal(texto);
-        const todos: Producto[] = [...personalizadosRef];
-        for (const r of localesFinal) {
-          if (!todos.some((t) => t.nombre.toLowerCase() === r.nombre.toLowerCase()))
-            todos.push(r);
+        const deBD = await buscarAlimentosPersonalizados(texto, PAIS_USUARIO, []).catch(() => [] as any[]);
+        if (currentSearch.current !== texto) return;
+
+        const vistos = new Set<string>();
+        const productos: Producto[] = [];
+        for (const p of deBD) {
+          const k = (p.nombre ?? "").toLowerCase();
+          if (!k || vistos.has(k)) continue;
+          vistos.add(k);
+          productos.push({ ...normalizarProducto(p), esPersonalizado: true, scanCount: p.scan_count ?? 0 });
         }
-        for (const r of remotos) {
-          if (!todos.some((t) => t.nombre.toLowerCase() === r.nombre.toLowerCase()))
-            todos.push(r);
+
+        if (productos.length > 0) {
+          const rankeados = rankear(texto, productos);
+          if (rankeados.length > 0 && currentSearch.current === texto) {
+            // BD al principio, locales sin duplicar al final
+            const nombresDB = new Set(rankeados.map(r => r.nombre.toLowerCase()));
+            const localesSinDup = locales.filter(l => !nombresDB.has(l.nombre.toLowerCase()));
+            const merged = [...rankeados, ...localesSinDup];
+            setResultados(merged);
+            setMemCached(texto, merged);
+            scrollRef.current?.scrollTo?.({ y: 0, animated: false });
+          }
         }
-        cacheRef.current[texto] = todos;
-        setCached(texto, todos);
-        if (currentSearch.current === texto) setResultados(todos);
       } catch {}
-      finally {
-        if (currentSearch.current === texto) setCargando(false);
-      }
-    }, 150);
+
+      if (currentSearch.current !== texto) return;
+
+      // 4. APIs externas (OFF / USDA) — usa query corregida para mejores resultados
+      try {
+        await buscarProductosPorNombre(texto, (nuevos) => {
+          if (currentSearch.current !== texto) return;
+          setResultados(prev => {
+            const vistosPrev = new Set(prev.map(p => p.nombre.toLowerCase()));
+            const sinDup = nuevos.filter(n => !vistosPrev.has(n.nombre.toLowerCase()));
+            if (sinDup.length === 0) return prev;
+            // Re-rankear todo: los más relevantes siempre arriba
+            const todo = rankear(texto, [...prev, ...sinDup]);
+            setMemCached(texto, todo);
+            return todo;
+          });
+        }, PAIS_USUARIO);
+      } catch {}
+
+      if (currentSearch.current === texto) setCargando(false);
+    }, 200);
   };
 
   // ── iniciarVoz — micrófono robusto para cualquier navegador/dispositivo ───────
@@ -444,7 +998,7 @@ export default function AddFoodScreen() {
         // Fallback para Firefox u otros sin Web Speech API:
         // Grabamos con MediaRecorder y transcribimos vía Whisper en el servidor.
         if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-          Alert.alert("🎤 Voz no disponible", "Tu navegador no soporta micrófono. Prueba Chrome, Edge o Safari.");
+          Alert.alert(t.voiceUnavailable, t.voiceUnavailableMsg);
           return;
         }
 
@@ -487,12 +1041,12 @@ export default function AddFoodScreen() {
                 if (json.text) {
                   buscarConDebounce(json.text);
                 } else if (json.error === "not-configured") {
-                  Alert.alert("🎤 Voz no configurada", "El servidor no tiene clave de transcripción. Usa Chrome o Edge para la búsqueda por voz.");
+                  Alert.alert(t.voiceNotConfigured, t.voiceNotConfiguredMsg);
                 } else if (json.error) {
-                  Alert.alert("Error de voz", "No se pudo transcribir el audio. Inténtalo de nuevo.");
+                  Alert.alert(t.voiceError, t.voiceTranscribeError);
                 }
               } catch {
-                Alert.alert("Error de voz", "Sin conexión. Comprueba tu red e inténtalo de nuevo.");
+                Alert.alert(t.voiceError, t.voiceNoConnection);
               } finally {
                 setEscuchando(false);
               }
@@ -508,22 +1062,16 @@ export default function AddFoodScreen() {
             setEscuchando(false);
             mediaRecorderRef.current = null;
             if (e?.name === "NotAllowedError" || e?.name === "PermissionDeniedError") {
-              Alert.alert("🎤 Micrófono bloqueado", "Permite el acceso al micrófono en la barra de tu navegador.");
+              Alert.alert(t.micBlocked, t.micAllowBrowser);
             } else {
-              Alert.alert("Error", "No se pudo acceder al micrófono.");
+              Alert.alert(t.error, t.micAccessError);
             }
           });
         return;
       }
 
       // ── Mensaje de instrucciones si el permiso está denegado ──────────────
-      const instruccionesPermiso =
-        "Para activarlo:\n\n" +
-        "• Toca 🔒 en la barra de URL\n" +
-        "• Permisos del sitio → Micrófono → Permitir\n" +
-        "• Recarga la página\n\n" +
-        "Si el candado no aparece:\n" +
-        "Chrome ⋮ → Configuración → Privacidad → Permisos del sitio → Micrófono";
+      const instruccionesPermiso = t.micBlockedInstructions;
 
       // ── Crea el objeto SR, lo guarda en ref (evita GC) y llama start() ───
       const arrancarReconocimiento = () => {
@@ -578,13 +1126,13 @@ export default function AddFoodScreen() {
           switch (e.error) {
             case "not-allowed":
             case "service-not-allowed":
-              Alert.alert("🎤 Micrófono bloqueado", instruccionesPermiso, [{ text: "Entendido" }]);
+              Alert.alert(t.micBlocked, instruccionesPermiso, [{ text: t.understood }]);
               break;
             case "network":
-              Alert.alert("Sin conexión", "El reconocimiento de voz necesita internet.");
+              Alert.alert(t.noConnectionTitle, t.voiceNeedsInternet);
               break;
             case "audio-capture":
-              Alert.alert("Sin micrófono", "No se detectó micrófono en el dispositivo.");
+              Alert.alert(t.noMicTitle, t.noMicMsg);
               break;
             case "language-not-supported":
               // Reintentar siempre con español explícito
@@ -612,7 +1160,7 @@ export default function AddFoodScreen() {
             case "aborted":
               break; // silencioso — el usuario no habló o canceló
             default:
-              Alert.alert("Error de voz", `Error: ${e.error}. Recarga e inténtalo de nuevo.`);
+              Alert.alert(t.voiceError, t.voiceGenericError.replace("{code}", e.error));
           }
         };
 
@@ -634,11 +1182,11 @@ export default function AddFoodScreen() {
           recognitionRef.current = null;
           const name = err?.name ?? "";
           if (name === "NotAllowedError" || name === "SecurityError") {
-            Alert.alert("🎤 Micrófono bloqueado", instruccionesPermiso, [{ text: "Entendido" }]);
+            Alert.alert(t.micBlocked, instruccionesPermiso, [{ text: t.understood }]);
           } else if (name === "InvalidStateError") {
             // ya había un reconocimiento activo — ignorar
           } else {
-            Alert.alert("Error de voz", err?.message ?? "No se pudo iniciar el micrófono. Recarga la página e inténtalo de nuevo.");
+            Alert.alert(t.voiceError, err?.message ?? t.micStartError);
           }
         }
       };
@@ -656,7 +1204,7 @@ export default function AddFoodScreen() {
         const { ExpoSpeechRecognitionModule } = await import("expo-speech-recognition");
         const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
         if (!granted) {
-          Alert.alert("Permiso denegado", "Activa el micrófono en Ajustes del dispositivo.");
+          Alert.alert(t.permissionDenied, t.activateMicSettings);
           return;
         }
         setEscuchando(true);
@@ -682,7 +1230,7 @@ export default function AddFoodScreen() {
         });
       } catch {
         setEscuchando(false);
-        Alert.alert("Voz no disponible", "No se pudo iniciar el reconocimiento de voz.");
+        Alert.alert(t.voiceUnavailable, t.voiceNativeUnavailable);
       }
     })();
   };
@@ -690,19 +1238,54 @@ export default function AddFoodScreen() {
   const cargarPorCodigo = async (c: string) => {
     if (!c.trim()) return;
     setCargando(true);
-    const prod = await buscarDesdeEscaneo(c);
+    const prods = await buscarDesdeEscaneoMultiple(c);
     setCargando(false);
-    if (prod) {
-      const normalizado = normalizarProducto(prod);
-      const updated = await registrarEnHistorial(normalizado);
-      setRecentFoods(updated);
-      setProducto(normalizado);
-      setResultados([]);
-      setGuardado(false);
-      resetEnvase();
-      resetPorcion();
-    } else {
+    if (prods.length === 0) {
       setCodigoNoEncontrado(c);
+      return;
+    }
+    if (prods.length > 1) {
+      // Múltiples versiones del mismo código → mostrar lista para que el usuario elija
+      setResultados(prods.map(p => ({ ...normalizarProducto(p), codigoBarras: c.trim() })));
+      setProducto(null);
+      setBusqueda("");
+      return;
+    }
+    // Un solo resultado → seleccionar directamente (comportamiento anterior)
+    const normalizado = { ...normalizarProducto(prods[0]), codigoBarras: c.trim() };
+    const updated = await registrarEnHistorial(normalizado);
+    setRecentFoods(updated);
+    setProducto(normalizado);
+    setResultados([]);
+    setGuardado(false);
+    resetEnvase();
+    resetPorcion();
+    // Incrementar scan_count en D1 (igual que al buscar por nombre)
+    if (!normalizado.esPersonalizado) {
+      guardarAlimentoBuscado({
+        nombre: normalizado.nombre, marca: normalizado.marca,
+        supermercado: normalizado.supermercado,
+        calorias: normalizado.nutrientes.calorias,
+        proteinas: normalizado.nutrientes.proteinas,
+        grasas: normalizado.nutrientes.grasas,
+        grasas_saturadas: normalizado.nutrientes.grasasSaturadas ?? 0,
+        carbohidratos: normalizado.nutrientes.carbohidratos,
+        azucares: normalizado.nutrientes.azucares ?? 0,
+        fibra: normalizado.nutrientes.fibra ?? 0,
+        sal: normalizado.nutrientes.sal ?? 0,
+        codigo_barras: c.trim(),
+      }).catch(() => {});
+    }
+    if (!normalizado.pesoEnvase) {
+      try {
+        const saved = await AsyncStorage.getItem(ENVASE_CACHE_KEY(c.trim()));
+        if (saved && Number(saved) > 0) {
+          setPesoEnvase(saved);
+          setMostrarEnvaseManual(true);
+        }
+        const savedNombre = await AsyncStorage.getItem(ENVASE_NOMBRE_CACHE_KEY(c.trim()));
+        if (savedNombre) setNombreEnvase(savedNombre);
+      } catch {}
     }
   };
 
@@ -717,6 +1300,54 @@ export default function AddFoodScreen() {
     setGramos("100");
     setGuardado(false);
     resetEnvase();
+    // Guardar en Supabase si no proviene ya de ahí
+    if (!prod.esPersonalizado) {
+      guardarAlimentoBuscado({
+        nombre: normalizado.nombre,
+        marca: normalizado.marca,
+        supermercado: normalizado.supermercado,
+        calorias: normalizado.nutrientes.calorias,
+        proteinas: normalizado.nutrientes.proteinas,
+        grasas: normalizado.nutrientes.grasas,
+        grasas_saturadas: normalizado.nutrientes.grasasSaturadas ?? 0,
+        carbohidratos: normalizado.nutrientes.carbohidratos,
+        azucares: normalizado.nutrientes.azucares ?? 0,
+        fibra: normalizado.nutrientes.fibra ?? 0,
+        sal: normalizado.nutrientes.sal ?? 0,
+        ...((normalizado as any).codigoBarras ? { codigo_barras: (normalizado as any).codigoBarras } : {}),
+      }).catch(() => {});
+    }
+    if (!normalizado.pesoEnvase) {
+      const cacheId = (normalizado as any).codigoBarras || normalizado.nombre;
+      try {
+        const saved = await AsyncStorage.getItem(ENVASE_CACHE_KEY(cacheId));
+        if (saved && Number(saved) > 0) {
+          setPesoEnvase(saved);
+          setMostrarEnvaseManual(true);
+        }
+        const savedNombre = await AsyncStorage.getItem(ENVASE_NOMBRE_CACHE_KEY(cacheId));
+        if (savedNombre) setNombreEnvase(savedNombre);
+      } catch {}
+      // Obtener peso/nombre de envase de Supabase (datos de otros usuarios)
+      supabase
+        .from("alimentos_personalizados")
+        .select("peso_envase, nombre_unidad_envase")
+        .ilike("nombre", normalizado.nombre)
+        .not("peso_envase", "is", null)
+        .limit(1)
+        .then(({ data }) => {
+          if (data?.[0]?.peso_envase) {
+            const envaseStr = String(data[0].peso_envase);
+            setPesoEnvase(envaseStr);
+            setMostrarEnvaseManual(true);
+            AsyncStorage.setItem(ENVASE_CACHE_KEY(cacheId), envaseStr).catch(() => {});
+            if (data[0].nombre_unidad_envase) {
+              setNombreEnvase(data[0].nombre_unidad_envase);
+              AsyncStorage.setItem(ENVASE_NOMBRE_CACHE_KEY(cacheId), data[0].nombre_unidad_envase).catch(() => {});
+            }
+          }
+        }).catch(() => {});
+    }
   };
 
   // ── guardarAlimento ───────────────────────────────────────────────────────
@@ -727,6 +1358,10 @@ export default function AddFoodScreen() {
 
     const targetKey = storageKeyParam || STORAGE_KEY;
     const fechaStr  = targetKey.replace("nutri_meals_", "");
+    const gramosNum = Number(gramos) || 0;
+
+    // Calcular la etiqueta de la porción guardada
+    const portionLabel = portionLabelFromPicker;
 
     const entradaComida = {
       id: Date.now().toString(),
@@ -741,6 +1376,7 @@ export default function AddFoodScreen() {
       sugar: Number(macros.azucares.toFixed(1)),
       fiber: Number(macros.fibra.toFixed(1)),
       salt: Number(macros.sal.toFixed(3)),
+      portionLabel,
       per100: {
         calories: producto.nutrientes.calorias,
         protein: producto.nutrientes.proteinas,
@@ -751,9 +1387,42 @@ export default function AddFoodScreen() {
         fiber: producto.nutrientes.fibra,
         salt: producto.nutrientes.sal,
       },
-      porciones: producto.porciones && producto.porciones.length > 0
-        ? producto.porciones : undefined,
+      porciones: (() => {
+        const base = producto.porciones && producto.porciones.length > 0 ? [...producto.porciones] : [];
+        const envaseG = Number(pesoEnvase) || producto.pesoEnvase || 0;
+        if (envaseG > 0 && !base.some(p => p.gramos === envaseG)) {
+          const rawNombre = nombreEnvase.trim()
+            ? (nombreEnvase.trim().match(/^\d/) ? nombreEnvase.trim() : `1 ${nombreEnvase.trim()}`)
+            : (producto.nombreUnidadEnvase ?? detectarNombreUnidad(producto.nombre, envaseG));
+          base.push({ nombre: rawNombre.replace(/^1\s+/, ""), gramos: envaseG });
+        }
+        return base.length > 0 ? base : undefined;
+      })(),
+      porcionUsadaIdx: porcionUsadaIdx !== null ? porcionUsadaIdx : undefined,
+      porcionUsadaCantidad: porcionUsadaIdx !== null ? porcionUsadaCantidad : undefined,
     };
+
+    // Guardar envase manual en caché local (para este dispositivo)
+    if (Number(pesoEnvase) > 0 && !producto.pesoEnvase) {
+      const cacheId = producto.codigoBarras || producto.nombre;
+      AsyncStorage.setItem(ENVASE_CACHE_KEY(cacheId), pesoEnvase).catch(() => {});
+      if (nombreEnvase.trim()) {
+        AsyncStorage.setItem(ENVASE_NOMBRE_CACHE_KEY(cacheId), nombreEnvase.trim()).catch(() => {});
+      }
+    }
+
+    // Si el usuario introdujo el envase manualmente con código de barras → guardar para todos
+    if (Number(pesoEnvase) > 0 && producto.codigoBarras && !producto.pesoEnvase) {
+      (async () => {
+        try {
+          const updates: any = { peso_envase: Number(pesoEnvase) };
+          if (nombreEnvase.trim()) updates.nombre_unidad_envase = nombreEnvase.trim();
+          await supabase.from("alimentos_personalizados")
+            .update(updates)
+            .eq("codigo_barras", producto.codigoBarras!);
+        } catch {}
+      })();
+    }
 
     try {
       // 1. Guardar en AsyncStorage
@@ -762,6 +1431,7 @@ export default function AddFoodScreen() {
       const meals = stored ? { ...base, ...JSON.parse(stored) } : base;
       meals[mealSeleccionada] = [...(meals[mealSeleccionada] ?? []), entradaComida];
       await AsyncStorage.setItem(targetKey, JSON.stringify(meals));
+      syncDayToCloud(targetKey, meals);
 
       // 2. Supabase en background (no bloquea si falla)
       supabase.auth.getSession().then(({ data: { session } }) => {
@@ -772,6 +1442,8 @@ export default function AddFoodScreen() {
             meal_type: mealSeleccionada,
             food_data: entradaComida,
           });
+          // Actualizar racha del día al guardar comida
+          actualizarRacha(session.user.id).catch(() => {});
         }
       }).catch(() => {});
 
@@ -781,24 +1453,10 @@ export default function AddFoodScreen() {
       setGuardado(true);
       setTimeout(() => router.back(), 600);
     } catch (e: any) {
-      setSaveError(e?.message ?? "No se pudo guardar. Inténtalo de nuevo.");
+      setSaveError(e?.message ?? t.saveErrorMsg);
     }
   };
 
-  const renderPorciones = (base: number) => (
-    <View style={s.envasePorciones}>
-      {[{ fraccion: 1, label: "Entero" }, { fraccion: 0.5, label: "½" }, { fraccion: 0.75, label: "¾" }, { fraccion: 0.25, label: "¼" }].map(({ fraccion, label }) => {
-        const g = Math.round(base * fraccion);
-        const activo = gramos === String(g);
-        return (
-          <TouchableOpacity key={fraccion} style={[s.porcionChip, activo && s.porcionChipActive]} onPress={() => { setGramos(String(g)); setGuardado(false); }}>
-            <Text style={[s.porcionChipLabel, activo && s.porcionChipLabelActive]}>{label}</Text>
-            <Text style={[s.porcionChipG, activo && s.porcionChipLabelActive]}>{g}g</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
 
   const listaHistorial = historialTab === "recientes" ? recentFoods : favorites;
 
@@ -806,110 +1464,159 @@ export default function AddFoodScreen() {
     <View style={s.historialWrap}>
       <View style={s.historialTabs}>
         <TouchableOpacity style={[s.historialTab, historialTab === "recientes" && s.historialTabActive]} onPress={() => setHistorialTab("recientes")}>
-          <Text style={[s.historialTabText, historialTab === "recientes" && s.historialTabTextActive]}>⚡ Recientes</Text>
+          <Text style={[s.historialTabText, historialTab === "recientes" && s.historialTabTextActive]}>{t.recentFoods}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[s.historialTab, historialTab === "favoritos" && s.historialTabActive]} onPress={() => setHistorialTab("favoritos")}>
-          <Text style={[s.historialTabText, historialTab === "favoritos" && s.historialTabTextActive]}>★ Favoritos</Text>
+          <Text style={[s.historialTabText, historialTab === "favoritos" && s.historialTabTextActive]}>{t.favorites}</Text>
         </TouchableOpacity>
       </View>
-      {listaHistorial.length > 0 && <Text style={s.swipeHint}>← Desliza para favoritar</Text>}
+      {listaHistorial.length > 0 && <Text style={s.swipeHint}>{t.swipeToFav}</Text>}
       {listaHistorial.length === 0 ? (
         <Text style={s.emptyHistory}>
-          {historialTab === "recientes" ? "Aquí aparecerán los alimentos que busques" : "Pulsa ☆ o desliza ← en cualquier alimento para guardarlo"}
+          {historialTab === "recientes" ? t.noRecentFoods : t.noFavorites}
         </Text>
       ) : (
         listaHistorial.map((food, i) => (
-          <SwipeableFoodItem key={i} prod={food} isFav={isFav(food.nombre)} onSelect={() => seleccionarProducto(food)} onToggleFav={() => handleToggleFav(food)} colors={colors} />
+          <SwipeableFoodItem key={i} prod={food} isFav={isFav(food.nombre)} onSelect={handleSelectItem} onToggleFav={handleToggleFavItem} colors={colors} alergias={alergias} />
         ))
       )}
       {historialTab === "recientes" && recentFoods.length > 0 && (
-        <TouchableOpacity onPress={async () => { setRecentFoods([]); await AsyncStorage.removeItem(RECENT_FOODS_KEY); }} style={s.clearAllBtn}>
-          <Text style={s.clearAllBtnText}>Borrar recientes</Text>
+        <TouchableOpacity onPress={async () => { setRecentFoods([]); await AsyncStorage.removeItem(RECENT_FOODS_KEY); clearRecientesCloud().catch(() => {}); }} style={s.clearAllBtn}>
+          <Text style={s.clearAllBtnText}>{t.clearRecent}</Text>
         </TouchableOpacity>
       )}
       <View style={s.quickBtns}>
-        <TouchableOpacity style={s.quickBtn} onPress={() => router.push("/create-food")}>
-          <Text style={s.quickBtnText}>➕ ¿No encuentras lo que buscas? Créalo tú</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.quickBtn} onPress={() => router.push("/recetas")}>
-          <Text style={s.quickBtnText}>🍳 Añadir desde recetas</Text>
+        <TouchableOpacity style={s.quickBtn} onPress={() => router.push({ pathname: "/recetas", params: { openCreate: "1" } })}>
+          <Text style={s.quickBtnText}>{t.addFromRecipes}</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 
+  // Header compartido para FlatList (tab nombre) y ScrollView (resto de tabs)
+  const renderHeader = () => (
+    <>
+      <View style={s.header}>
+        <TouchableOpacity onPress={() => router.back()}><Text style={s.backText}>{t.back}</Text></TouchableOpacity>
+        <View style={s.titleRow}>
+          <Text style={s.title}>{t.addFoodTitle}</Text>
+          <TouchableOpacity style={s.crealoBtn} onPress={() => router.push("/create-food")}>
+            <Text style={s.crealoBtnText}>{t.createYourself}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+      <View style={s.tabs}>
+        <TouchableOpacity style={[s.tab, tab === "nombre" && s.tabActive]} onPress={() => { setTab("nombre"); setProducto(null); setResultados([]); setBusqueda(""); setCodigoNoEncontrado(null); }}>
+          <Text style={[s.tabText, tab === "nombre" && s.tabTextActive]}>{t.byName}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[s.tab, tab === "codigo" && s.tabActive]} onPress={() => { setTab("codigo"); setProducto(null); setResultados([]); setCodigoNoEncontrado(null); }}>
+          <Text style={[s.tabText, tab === "codigo" && s.tabTextActive]}>{t.byBarcode}</Text>
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
+  // Tab "nombre" sin producto: FlatList como scroll raíz para virtualización real
+  if (tab === "nombre" && !producto) {
+    const listHeader = (
+      <View style={s.section}>
+        {renderHeader()}
+        <View style={s.searchBox}>
+          <Text style={s.searchIcon}>🔍</Text>
+          <TextInput style={s.searchInput} value={busqueda} onChangeText={buscarConDebounce} placeholder="Manzana, pollo, arroz..." placeholderTextColor={colors.textMuted} returnKeyType="search" autoCorrect={false} autoCapitalize="none" />
+          {busqueda.length > 0 && (
+            <TouchableOpacity onPress={() => { setBusqueda(""); setResultados([]); setCargando(false); currentSearch.current = ""; }}>
+              <Text style={s.clearBtn}>✕</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={iniciarVoz} style={{ paddingHorizontal: 4 }}>
+            <Text style={[s.clearBtn, escuchando && { color: "#F87171" }]}>
+              {escuchando ? "🔴" : "🎤"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        {busqueda.length === 0 && renderHistorial()}
+        {busqueda.length > 0 && cargando && resultados.length === 0 && (
+          [0,1,2].map(i => <SkeletonFoodItem key={i} colors={colors} />)
+        )}
+        {busqueda.length > 0 && cargando && resultados.length > 0 && (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 6, paddingHorizontal: 4 }}>
+            <ActivityIndicator size="small" color="#1F6FEB" />
+            <Text style={{ color: colors.textMuted, fontSize: 12 }}>{t.loading}</Text>
+          </View>
+        )}
+      </View>
+    );
+
+    return (
+      <SafeAreaView style={[s.safe, { backgroundColor: colors.bg }]}>
+        <StatusBar barStyle={theme === "dark" ? "light-content" : "dark-content"} backgroundColor={colors.bg} />
+        <FlatList
+          ref={scrollRef}
+          data={busqueda.length > 0 ? resultados : []}
+          keyExtractor={(item, i) => `${item.nombre}_${i}`}
+          renderItem={({ item }) => (
+            <SwipeableFoodItem
+              prod={item}
+              isFav={isFav(item.nombre)}
+              onSelect={handleSelectItem}
+              onToggleFav={handleToggleFavItem}
+              colors={colors}
+              alergias={alergias}
+            />
+          )}
+          ListHeaderComponent={listHeader}
+          ListFooterComponent={
+            busqueda.length > 0 && !cargando && resultados.length === 0 ? (
+              <View style={[s.section, s.noResultsWrap]}>
+                <Text style={s.emptyText}>{t.noResults} "{busqueda}"</Text>
+                {!isOnline && (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#EF444422", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
+                    <Text style={{ fontSize: 14 }}>📡</Text>
+                    <Text style={{ color: "#EF4444", fontSize: 13 }}>{t.noConnection}</Text>
+                  </View>
+                )}
+                <TouchableOpacity style={s.quickBtn} onPress={() => router.push("/create-food")}><Text style={s.quickBtnText}>{t.createThisFood}</Text></TouchableOpacity>
+                <TouchableOpacity style={s.quickBtn} onPress={() => router.push({ pathname: "/recetas", params: { openCreate: "1" } })}><Text style={s.quickBtnText}>{t.addFromRecipes}</Text></TouchableOpacity>
+              </View>
+            ) : <View style={{ height: 60 }} />
+          }
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          contentContainerStyle={{ paddingHorizontal: 16, backgroundColor: colors.bg }}
+          initialNumToRender={8}
+          maxToRenderPerBatch={5}
+          windowSize={5}
+          removeClippedSubviews={Platform.OS !== "web"}
+        />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[s.safe, { backgroundColor: colors.bg }]}>
       <StatusBar barStyle={theme === "dark" ? "light-content" : "dark-content"} backgroundColor={colors.bg} />
-      <ScrollView style={[s.scroll, { backgroundColor: colors.bg }]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
-        <View style={s.header}>
-          <TouchableOpacity onPress={() => router.back()}><Text style={s.backText}>← Volver</Text></TouchableOpacity>
-          <Text style={s.title}>Añadir alimento</Text>
-        </View>
-
-        <View style={s.tabs}>
-          <TouchableOpacity style={[s.tab, tab === "nombre" && s.tabActive]} onPress={() => { setTab("nombre"); setProducto(null); setResultados([]); setBusqueda(""); setCodigoNoEncontrado(null); }}>
-            <Text style={[s.tabText, tab === "nombre" && s.tabTextActive]}>🔍 Por nombre</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[s.tab, tab === "codigo" && s.tabActive]} onPress={() => { setTab("codigo"); setProducto(null); setResultados([]); setCodigoNoEncontrado(null); }}>
-            <Text style={[s.tabText, tab === "codigo" && s.tabTextActive]}>📷 Por código</Text>
-          </TouchableOpacity>
-        </View>
-
-        {tab === "nombre" && !producto && (
-          <View style={s.section}>
-            <View style={s.searchBox}>
-              <Text style={s.searchIcon}>🔍</Text>
-              <TextInput style={s.searchInput} value={busqueda} onChangeText={buscarConDebounce} placeholder="Manzana, pollo, arroz..." placeholderTextColor={colors.textMuted} returnKeyType="search" autoCorrect={false} autoCapitalize="none" />
-              {busqueda.length > 0 && (
-                <TouchableOpacity onPress={() => { setBusqueda(""); setResultados([]); setCargando(false); currentSearch.current = ""; }}>
-                  <Text style={s.clearBtn}>✕</Text>
-                </TouchableOpacity>
-              )}
-              {/* ── Botón de voz ── */}
-              <TouchableOpacity onPress={iniciarVoz} style={{ paddingHorizontal: 4 }}>
-                <Text style={[s.clearBtn, escuchando && { color: "#F87171" }]}>
-                  {escuchando ? "🔴" : "🎤"}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            {busqueda.length === 0 && renderHistorial()}
-            {busqueda.length > 0 && (
-              <>
-                {cargando && <View style={s.loadingRow}><ActivityIndicator color="#58A6FF" size="small" /><Text style={s.loadingText}>Buscando en tiendas...</Text></View>}
-                {resultados.map((prod, i) => (
-                  <SwipeableFoodItem key={i} prod={prod} isFav={isFav(prod.nombre)} onSelect={() => seleccionarProducto(prod)} onToggleFav={() => handleToggleFav(prod)} colors={colors} />
-                ))}
-                {!cargando && resultados.length === 0 && (
-                  <View style={s.noResultsWrap}>
-                    <Text style={s.emptyText}>Sin resultados para "{busqueda}"</Text>
-                    <TouchableOpacity style={s.quickBtn} onPress={() => router.push("/create-food")}><Text style={s.quickBtnText}>➕ Crear este alimento</Text></TouchableOpacity>
-                    <TouchableOpacity style={s.quickBtn} onPress={() => router.push("/recetas")}><Text style={s.quickBtnText}>🍳 Añadir desde recetas</Text></TouchableOpacity>
-                  </View>
-                )}
-              </>
-            )}
-          </View>
-        )}
+      <ScrollView ref={scrollRef} style={[s.scroll, { backgroundColor: colors.bg }]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+        {renderHeader()}
 
         {tab === "codigo" && !producto && (
           <View style={s.section}>
             <View style={s.searchRow}>
-              <TextInput style={s.searchInputCodigo} value={codigo} onChangeText={setCodigo} placeholder="Introduce el código de barras" placeholderTextColor={colors.textMuted} keyboardType="numeric" returnKeyType="search" onSubmitEditing={() => cargarPorCodigo(codigo)} />
-              <TouchableOpacity style={s.searchBtn} onPress={() => cargarPorCodigo(codigo)}><Text style={s.searchBtnText}>Buscar</Text></TouchableOpacity>
+              <TextInput style={s.searchInputCodigo} value={codigo} onChangeText={setCodigo} placeholder={t.enterBarcode} placeholderTextColor={colors.textMuted} keyboardType="numeric" returnKeyType="search" onSubmitEditing={() => cargarPorCodigo(codigo)} />
+              <TouchableOpacity style={s.searchBtn} onPress={() => cargarPorCodigo(codigo)}><Text style={s.searchBtnText}>{t.confirm}</Text></TouchableOpacity>
             </View>
-            <TouchableOpacity style={s.scanBtn} onPress={() => router.push("/scanner")}><Text style={s.scanBtnText}>📷 Escanear con cámara</Text></TouchableOpacity>
-            {cargando && <ActivityIndicator color="#58A6FF" style={{ marginTop: 20 }} />}
+            <TouchableOpacity style={s.scanBtn} onPress={() => router.push("/scanner")}><Text style={s.scanBtnText}>{t.scanWithCamera}</Text></TouchableOpacity>
+            {cargando && [0,1,2].map(i => <SkeletonFoodItem key={i} colors={colors} />)}
             {codigoNoEncontrado && !cargando && (
               <View style={s.notFoundBanner}>
-                <Text style={s.notFoundTitle}>Código no encontrado</Text>
+                <Text style={s.notFoundTitle}>{t.barcodeNotFound}</Text>
                 <Text style={s.notFoundSub}>{codigoNoEncontrado}</Text>
                 <View style={s.notFoundBtns}>
                   <TouchableOpacity style={s.notFoundBtn} onPress={() => { setCodigoNoEncontrado(null); router.back(); }}>
-                    <Text style={s.notFoundBtnText}>← Volver</Text>
+                    <Text style={s.notFoundBtnText}>{t.back}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={[s.notFoundBtn, s.notFoundBtnPrimary]} onPress={() => router.push({ pathname: "/create-food", params: { scannedCode: codigoNoEncontrado } })}>
-                    <Text style={[s.notFoundBtnText, s.notFoundBtnPrimaryText]}>➕ Añadir nuevo alimento</Text>
+                    <Text style={[s.notFoundBtnText, s.notFoundBtnPrimaryText]}>{t.addNewFood}</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -925,7 +1632,7 @@ export default function AddFoodScreen() {
               <View style={s.productTitleRow}>
                 <View style={s.productNameRow}>
                   <Text style={s.productName}>{producto.nombre}</Text>
-                  {producto.esPersonalizado && <View style={s.customBadge}><Text style={s.customBadgeText}>✦ propio</Text></View>}
+                  {producto.esPersonalizado && <View style={s.customBadge}><Text style={s.customBadgeText}>{t.customBadge}</Text></View>}
                 </View>
                 <TouchableOpacity style={s.productFavBtn} onPress={() => handleToggleFav(producto)}>
                   <Text style={[s.productFavIcon, isFav(producto.nombre) && s.productFavIconActive]}>{isFav(producto.nombre) ? "★" : "☆"}</Text>
@@ -933,105 +1640,63 @@ export default function AddFoodScreen() {
               </View>
               <View style={s.productMeta}>
                 <View style={[s.superBadgeLg, { backgroundColor: superColor + "22", borderColor: superColor + "55" }]}><Text style={[s.superBadgeLgText, { color: superColor }]}>{producto.supermercado}</Text></View>
-                {producto.marca !== "Natural" && producto.marca !== "Sin marca" && <Text style={s.productMarca}>{producto.marca}</Text>}
+                {producto.marca !== "Natural" && producto.marca !== "Sin marca" && producto.marca !== producto.supermercado && <Text style={s.productMarca}>{producto.marca}</Text>}
               </View>
             </View>
 
-            <View style={s.cantidadWrap}>
-              <View style={s.gramosRow}>
-                <Text style={s.gramosLabel}>Cantidad (g)</Text>
-                <TextInput style={s.gramosInput} value={gramos} onChangeText={(v) => { setGramos(v.replace(",", ".")); setGuardado(false); }} keyboardType="decimal-pad" selectTextOnFocus />
-              </View>
-              {producto.pesoEnvase && !mostrarEnvaseManual && (
-                <View style={s.envaseAutoWrap}>
-                  <View style={s.envaseAutoHeader}>
-                    <View><Text style={s.envaseAutoLabel}>📦 Peso del envase</Text><Text style={s.envaseAutoHint}>Según el fabricante</Text></View>
-                    <View style={[s.superBadgeLg, { backgroundColor: superColor + "22", borderColor: superColor + "55" }]}><Text style={[s.superBadgeLgText, { color: superColor }]}>{producto.pesoEnvase}g</Text></View>
+            {/* ── Selector de cantidad ── */}
+            <QuantitySelector
+              key={`${producto.nombre}_${producto.pesoEnvase ?? ""}_${pesoEnvase}_${nombreEnvase}`}
+              producto={producto}
+              pesoEnvaseNum={Number(pesoEnvase) || 0}
+              nombreEnvaseCustom={nombreEnvase || undefined}
+              onGramosChange={(g, label, pidx, pcant) => {
+                setGramos(String(g));
+                setPortionLabelFromPicker(label);
+                setPorcionUsadaIdx(pidx);
+                setPorcionUsadaCantidad(pcant);
+                setGuardado(false);
+              }}
+              colors={colors}
+            />
+
+            {/* Manual envase input (only when product has no preset weight) */}
+            {!producto.pesoEnvase && (
+              <View style={s.envaseWrapCompact}>
+                {!mostrarEnvaseManual ? (
+                  <TouchableOpacity style={s.envaseBtn} onPress={() => setMostrarEnvaseManual(true)}>
+                    <Text style={s.envaseBtnText}>{t.addPackageWeightBtn}</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={s.envaseWrap}>
+                    <View style={s.envaseRow}>
+                      <View style={s.envaseLeft}>
+                        <Text style={s.envaseLabel}>{t.weightGramsLabel}</Text>
+                        <Text style={s.envaseHint}>{t.weightGramsExample}</Text>
+                      </View>
+                      <TextInput style={s.envaseInput} value={pesoEnvase} onChangeText={v => { setPesoEnvase(v); setGuardado(false); }} keyboardType="numeric" selectTextOnFocus placeholder="125" placeholderTextColor={colors.textMuted} />
+                    </View>
+                    <View style={s.envaseRow}>
+                      <View style={s.envaseLeft}>
+                        <Text style={s.envaseLabel}>{t.unitNameLabel}</Text>
+                        <Text style={s.envaseHint}>{t.unitNameExample}</Text>
+                      </View>
+                      <TextInput style={s.envaseInput} value={nombreEnvase} onChangeText={v => { setNombreEnvase(v); setGuardado(false); }} placeholder={t.unitNamePlaceholder} placeholderTextColor={colors.textMuted} />
+                    </View>
+                    <TouchableOpacity onPress={resetEnvase}><Text style={s.envaseClose}>{t.removePackage}</Text></TouchableOpacity>
                   </View>
-                  {renderPorciones(producto.pesoEnvase)}
-                  <TouchableOpacity onPress={() => setMostrarEnvaseManual(true)}><Text style={s.envaseManualLink}>✏️ Cambiar peso manualmente</Text></TouchableOpacity>
-                </View>
-              )}
-              {(!producto.pesoEnvase || mostrarEnvaseManual) && (
-                <>
-                  {!mostrarEnvaseManual ? (
-                    <TouchableOpacity style={s.envaseBtn} onPress={() => setMostrarEnvaseManual(true)}><Text style={s.envaseBtnText}>📦 Usar peso del envase</Text></TouchableOpacity>
-                  ) : (
-                    <View style={s.envaseWrap}>
-                      <View style={s.envaseRow}>
-                        <View style={s.envaseLeft}><Text style={s.envaseLabel}>Peso del envase (g)</Text><Text style={s.envaseHint}>Ej: bolsa arroz 150g, lata 240g...</Text></View>
-                        <TextInput style={s.envaseInput} value={pesoEnvase} onChangeText={setPesoEnvase} keyboardType="numeric" selectTextOnFocus placeholder="150" placeholderTextColor={colors.textMuted} />
-                      </View>
-                      {Number(pesoEnvase) > 0 && renderPorciones(Number(pesoEnvase))}
-                      <TouchableOpacity onPress={resetEnvase}><Text style={s.envaseClose}>✕ Quitar envase</Text></TouchableOpacity>
-                    </View>
-                  )}
-                </>
-              )}
-            </View>
-
-            {producto.porciones && producto.porciones.length > 0 && (
-              <View style={s.porcionesWrap}>
-                <Text style={s.porcionesTitle}>🍽️ Porciones</Text>
-                <View style={s.porcionesGrid}>
-                  {producto.porciones.map((p, i) => {
-                    const activo = porcionSeleccionada === i;
-                    return (
-                      <TouchableOpacity
-                        key={i}
-                        style={[s.porcionItemBtn, activo && s.porcionItemBtnActive]}
-                        onPress={() => {
-                          setPorcionSeleccionada(activo ? null : i);
-                          setCantidadPorciones(1);
-                          setGramos(activo ? "100" : String(p.gramos * 1));
-                          setGuardado(false);
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={[s.porcionItemNombre, activo && s.porcionItemNombreActive]}>{p.nombre}</Text>
-                        <Text style={[s.porcionItemGramos, activo && s.porcionItemGramosActive]}>{p.gramos}g c/u</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                {porcionSeleccionada !== null && producto.porciones[porcionSeleccionada] && (() => {
-                  const p = producto.porciones![porcionSeleccionada];
-                  const totalGramos = p.gramos * cantidadPorciones;
-                  const kcalPorcion = Math.round(producto.nutrientes.calorias * p.gramos / 100);
-                  const kcalTotal = Math.round(producto.nutrientes.calorias * totalGramos / 100);
-                  return (
-                    <View style={s.cantidadPorcionWrap}>
-                      <Text style={s.cantidadPorcionLabel}>¿Cuántas {p.nombre.replace(/^\d+\s*/, "")}s?</Text>
-                      <View style={s.cantidadPorcionRow}>
-                        <TouchableOpacity style={s.cantidadBtn} onPress={() => { const nueva = Math.max(1, cantidadPorciones - 1); setCantidadPorciones(nueva); setGramos(String(p.gramos * nueva)); setGuardado(false); }}>
-                          <Text style={s.cantidadBtnText}>−</Text>
-                        </TouchableOpacity>
-                        <View style={s.cantidadNumWrap}>
-                          <Text style={s.cantidadNum}>{cantidadPorciones}</Text>
-                          <Text style={s.cantidadNumSub}>{p.nombre}</Text>
-                        </View>
-                        <TouchableOpacity style={s.cantidadBtn} onPress={() => { const nueva = cantidadPorciones + 1; setCantidadPorciones(nueva); setGramos(String(p.gramos * nueva)); setGuardado(false); }}>
-                          <Text style={s.cantidadBtnText}>+</Text>
-                        </TouchableOpacity>
-                      </View>
-                      <View style={s.cantidadResumen}>
-                        <Text style={s.cantidadResumenText}>{cantidadPorciones} × {p.gramos}g = <Text style={{ color: "#F9FAFB", fontWeight: "700" }}>{totalGramos}g</Text></Text>
-                        <Text style={[s.cantidadResumenText, { color: "#4ADE80" }]}>{kcalTotal} kcal ({kcalPorcion} kcal c/u)</Text>
-                      </View>
-                    </View>
-                  );
-                })()}
+                )}
               </View>
             )}
 
             <View style={s.macrosGrid}>
               {[
                 { val: caloriasCalculadas, label: "kcal", color: "#4ADE80", border: "#4ADE8033" },
-                { val: macros?.proteinas.toFixed(1) + "g", label: "Proteínas", color: "#60A5FA", border: "#60A5FA33" },
-                { val: macros?.carbohidratos.toFixed(1) + "g", label: "Carbos", color: "#FBBF24", border: "#FBBF2433" },
-                { val: macros?.grasas.toFixed(1) + "g", label: "Grasas", color: "#F87171", border: "#F8717133" },
+                { val: macros?.proteinas.toFixed(1) + "g", label: t.proteins, color: "#60A5FA", border: "#60A5FA33" },
+                { val: macros?.carbohidratos.toFixed(1) + "g", label: t.carbs, color: "#FBBF24", border: "#FBBF2433" },
+                { val: macros?.grasas.toFixed(1) + "g", label: t.fats, color: "#F87171", border: "#F8717133" },
               ].map((item) => (
-                <View key={item.label} style={[s.macroBox, { borderColor: item.border }]}>
+                <View key={item.color} style={[s.macroBox, { borderColor: item.border }]}>
                   <Text style={[s.macroBoxVal, { color: item.color }]}>{item.val}</Text>
                   <Text style={s.macroBoxLabel}>{item.label}</Text>
                 </View>
@@ -1040,29 +1705,29 @@ export default function AddFoodScreen() {
 
             <View style={s.macrosGrid}>
               {[
-                { val: macros?.grasasSaturadas.toFixed(1) + "g", label: "G. Sat.", color: "#FCA5A5", border: "#F8717122" },
-                { val: macros?.azucares.toFixed(1) + "g", label: "Azúcares", color: "#FDE68A", border: "#FBBF2422" },
-                { val: macros?.fibra.toFixed(1) + "g", label: "Fibra", color: "#6EE7B7", border: "#34D39933" },
-                { val: macros?.sal.toFixed(2) + "g", label: "Sal", color: "#CBD5E1", border: "#94A3B833" },
+                { val: macros?.grasasSaturadas.toFixed(1) + "g", label: t.saturatedFat, color: "#FCA5A5", border: "#F8717122" },
+                { val: macros?.azucares.toFixed(1) + "g", label: t.sugars, color: "#FDE68A", border: "#FBBF2422" },
+                { val: macros?.fibra.toFixed(1) + "g", label: t.fiber, color: "#6EE7B7", border: "#34D39933" },
+                { val: macros?.sal.toFixed(2) + "g", label: t.saltLabel, color: "#CBD5E1", border: "#94A3B833" },
               ].map((item) => (
-                <View key={item.label} style={[s.macroBox, { borderColor: item.border }]}>
+                <View key={item.color} style={[s.macroBox, { borderColor: item.border }]}>
                   <Text style={[s.macroBoxVal, s.macroBoxValSm, { color: item.color }]}>{item.val}</Text>
                   <Text style={s.macroBoxLabel}>{item.label}</Text>
                 </View>
               ))}
             </View>
 
-            <Text style={s.mealSelectorTitle}>Añadir a</Text>
+            <Text style={s.mealSelectorTitle}>{t.addTo}</Text>
             {isOtherDay && (
               <View style={{ backgroundColor: "#1F6FEB22", borderRadius: 10, padding: 10, borderWidth: 1, borderColor: "#1F6FEB55", marginBottom: 4 }}>
-                <Text style={{ color: "#58A6FF", fontSize: 13, fontWeight: "600", textAlign: "center" }}>📅 Añadiendo al {targetDateLabel}</Text>
+                <Text style={{ color: "#58A6FF", fontSize: 13, fontWeight: "600", textAlign: "center" }}>{t.addingToDate.replace("{date}", targetDateLabel)}</Text>
               </View>
             )}
             <View style={s.mealSelector}>
               {(Object.keys(MEAL_LABELS) as MealKey[]).map((m) => (
                 <TouchableOpacity key={m} style={[s.mealChip, mealSeleccionada === m && s.mealChipActive]} onPress={() => setMealSeleccionada(m)}>
                   <Text style={s.mealChipIcon}>{MEAL_ICONS[m]}</Text>
-                  <Text style={[s.mealChipText, mealSeleccionada === m && s.mealChipTextActive]}>{MEAL_LABELS[m]}</Text>
+                  <Text style={[s.mealChipText, mealSeleccionada === m && s.mealChipTextActive]}>{m === "desayuno" ? t.breakfast : m === "comida" ? t.lunch : m === "merienda" ? t.snack : t.dinner}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -1072,7 +1737,7 @@ export default function AddFoodScreen() {
               </View>
             )}
             <TouchableOpacity style={[s.saveBtn, guardado && s.saveBtnDone]} onPress={guardarAlimento} disabled={guardado}>
-              <Text style={s.saveBtnText}>{guardado ? "✓ Guardado" : "Guardar alimento"}</Text>
+              <Text style={s.saveBtnText}>{guardado ? t.saved : t.save}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -1082,6 +1747,173 @@ export default function AddFoodScreen() {
     </SafeAreaView>
   );
 }
+
+// ── QuantitySelector ─────────────────────────────────────────────────────────
+function QuantitySelector({ producto, pesoEnvaseNum, nombreEnvaseCustom, onGramosChange, colors }: {
+  producto: Producto;
+  pesoEnvaseNum: number;
+  nombreEnvaseCustom?: string;
+  onGramosChange: (grams: number, label: string | undefined, porcionIdx: number | null, porcionCantidad: string) => void;
+  colors: any;
+}) {
+  const { t } = useApp();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const chips = useMemo(() => buildChips(producto, pesoEnvaseNum, nombreEnvaseCustom),
+    [producto.nombre, producto.pesoEnvase, JSON.stringify(producto.porciones), pesoEnvaseNum, nombreEnvaseCustom]);
+
+  const [selKey, setSelKey]   = useState(chips[0]?.key ?? "g");
+  const [qty,    setQty]      = useState(1);
+  const [gramTxt, setGramTxt] = useState("100");
+  const [gramFocused, setGramFocused] = useState(false);
+  const [foodUnit, setFoodUnit] = useState<FoodUnit>("g");
+
+  const sel   = chips.find(c => c.key === selKey) ?? chips[chips.length - 1];
+  const total = sel.isGram
+    ? Math.round((Number(gramTxt) || 0) * FOOD_UNIT_GRAMS[foodUnit])
+    : sel.hasQty
+      ? Math.round(sel.grams * qty)
+      : sel.grams;
+
+  const changeFoodUnit = (newUnit: FoodUnit) => {
+    const currentGrams = Math.round((Number(gramTxt) || 0) * FOOD_UNIT_GRAMS[foodUnit]);
+    setGramTxt(String(+fromGrams(currentGrams, newUnit).toFixed(2)));
+    setFoodUnit(newUnit);
+  };
+
+  useEffect(() => {
+    // No disparar mientras el usuario está escribiendo en el campo de gramos
+    if (gramFocused && sel.isGram) return;
+    const unitName = sel.topLine.replace(/^\d+\s+/, ""); // "1 baguette" → "baguette"
+    const label = sel.isGram ? undefined
+      : sel.hasQty ? `${qty} ${unitName}`.trim()
+      : sel.topLine;
+    const porcionIdx = (!sel.isGram && sel.key.startsWith("p_"))
+      ? (producto.porciones?.findIndex(p => `p_${p.nombre}` === sel.key) ?? -1)
+      : -1;
+    const porcionIdxFinal = porcionIdx >= 0 ? porcionIdx : null;
+    const porcionCantidad = porcionIdxFinal !== null ? String(qty) : "";
+    onGramosChange(Math.max(1, total), label || undefined, porcionIdxFinal, porcionCantidad);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total, sel.key, qty, gramFocused]);
+
+  const pick = (key: string) => {
+    setSelKey(key);
+    setQty(1);
+    if (chips.find(c => c.key === key)?.isGram) setGramTxt("100");
+  };
+
+  return (
+    <View style={{ gap: 10 }}>
+      {/* ── Chips de unidad ── */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>
+        {chips.map(c => {
+          const active = c.key === selKey;
+          return (
+            <TouchableOpacity
+              key={c.key}
+              onPress={() => pick(c.key)}
+              style={[qss.chip,
+                { borderColor: active ? "#1F6FEB" : colors.cardBorder,
+                  backgroundColor: active ? "#1F6FEB" : colors.card }]}
+              activeOpacity={0.7}
+            >
+              <Text style={[qss.chipTop, { color: active ? "#fff" : colors.text }]}>{c.topLine}</Text>
+              {c.bottomLine && (
+                <Text style={[qss.chipBot, { color: active ? "#93C5FD" : colors.textMuted }]}>{c.bottomLine}</Text>
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {/* ── Stepper para unidades con cantidad ── */}
+      {sel.hasQty && (
+        <View style={[qss.stepRow, { backgroundColor: colors.bg }]}>
+          <TouchableOpacity style={qss.stepBtn} onPress={() => setQty(q => Math.max(1, q - 1))}>
+            <Text style={qss.stepBtnText}>−</Text>
+          </TouchableOpacity>
+          <View style={qss.stepMid}>
+            <Text style={[qss.stepNum, { color: colors.text }]}>{qty}</Text>
+            <Text style={[qss.stepUnit, { color: colors.textMuted }]}>{sel.topLine}</Text>
+          </View>
+          <TouchableOpacity style={qss.stepBtn} onPress={() => setQty(q => q + 1)}>
+            <Text style={qss.stepBtnText}>+</Text>
+          </TouchableOpacity>
+          <View style={[qss.stepBadge, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <Text style={qss.stepBadgeNum}>{total}</Text>
+            <Text style={qss.stepBadgeG}>g</Text>
+          </View>
+        </View>
+      )}
+
+      {/* ── Valor fijo (fracciones, 100g) ── */}
+      {!sel.hasQty && !sel.isGram && (
+        <View style={[qss.fixedRow, { backgroundColor: colors.bg }]}>
+          <Text style={[qss.fixedLabel, { color: colors.textSub }]}>{sel.topLine}</Text>
+          <Text style={qss.fixedVal}>{total} g</Text>
+        </View>
+      )}
+
+      {/* ── Entrada libre de gramos ── */}
+      {sel.isGram && (
+        <View style={{ gap: 8 }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 2 }}>
+            {(["g", "oz", "cup", "tbsp", "tsp", "ml"] as FoodUnit[]).map(u => {
+              const label = u === "cup" ? t.unitCup : u === "tbsp" ? t.unitTbsp : u === "tsp" ? t.unitTsp : u;
+              const active = foodUnit === u;
+              return (
+                <TouchableOpacity key={u} onPress={() => changeFoodUnit(u)}
+                  style={{ borderRadius: 10, borderWidth: 1.5, paddingHorizontal: 10, paddingVertical: 6,
+                    borderColor: active ? "#1F6FEB" : colors.cardBorder,
+                    backgroundColor: active ? "#1F6FEB22" : colors.card }}>
+                  <Text style={{ fontSize: 12, fontWeight: "700", color: active ? "#58A6FF" : colors.textSub }}>{label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+          <View style={[qss.gramRow, { backgroundColor: colors.bg }]}>
+            <Text style={[qss.gramLabel, { color: colors.textSub }]}>{t.foodUnitLabel}</Text>
+            <TextInput
+              style={[qss.gramInput,
+                { color: colors.text, borderColor: colors.cardBorder, backgroundColor: colors.card }]}
+              value={gramTxt}
+              onChangeText={v => { setGramTxt(v.replace(",", ".").replace(/[^0-9.]/g, "")); }}
+              onFocus={() => setGramFocused(true)}
+              onBlur={() => setGramFocused(false)}
+              keyboardType="decimal-pad"
+              selectTextOnFocus
+            />
+            <Text style={[qss.gramG, { color: colors.textMuted }]}>{foodUnit === "cup" ? t.unitCup : foodUnit === "tbsp" ? t.unitTbsp : foodUnit === "tsp" ? t.unitTsp : foodUnit}</Text>
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const qss = StyleSheet.create({
+  chip:        { borderRadius: 14, borderWidth: 1.5, paddingHorizontal: 14, paddingVertical: 10, alignItems: "center", minWidth: 64 },
+  chipTop:     { fontSize: 13, fontWeight: "700" },
+  chipBot:     { fontSize: 11, marginTop: 2 },
+  stepRow:     { flexDirection: "row", alignItems: "center", borderRadius: 16, padding: 12, gap: 10 },
+  stepBtn:     { width: 46, height: 46, borderRadius: 23, backgroundColor: "#1F6FEB", alignItems: "center", justifyContent: "center" },
+  stepBtnText: { color: "#fff", fontSize: 26, fontWeight: "300", lineHeight: 30 },
+  stepMid:     { flex: 1, alignItems: "center", gap: 2 },
+  stepNum:     { fontSize: 38, fontWeight: "900", lineHeight: 42 },
+  stepUnit:    { fontSize: 11 },
+  stepBadge:   { borderRadius: 12, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 8, alignItems: "center", minWidth: 60 },
+  stepBadgeNum:{ color: "#4ADE80", fontSize: 20, fontWeight: "800" },
+  stepBadgeG:  { color: "#4ADE80", fontSize: 11 },
+  fixedRow:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderRadius: 14, padding: 14 },
+  fixedLabel:  { fontSize: 15 },
+  fixedVal:    { color: "#4ADE80", fontSize: 18, fontWeight: "700" },
+  gramRow:     { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 14, padding: 14 },
+  gramLabel:   { fontSize: 15, flex: 1 },
+  gramInput:   { borderWidth: 1.5, borderRadius: 12, padding: 10, fontSize: 22, fontWeight: "800", width: 100, textAlign: "center" },
+  gramG:       { fontSize: 15 },
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 function makeSwStyles(c: any) { return StyleSheet.create({
   wrap: { position: "relative", marginTop: 8, overflow: "hidden", borderRadius: 12 },
@@ -1115,7 +1947,10 @@ function makeSStyles(c: any) { return StyleSheet.create({
   scroll: { flex: 1, paddingHorizontal: 16 },
   header: { paddingTop: 16, paddingBottom: 8, gap: 4 },
   backText: { color: "#58A6FF", fontSize: 14, marginBottom: 4 },
+  titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   title: { color: c.text, fontSize: 26, fontWeight: "800" },
+  crealoBtn: { backgroundColor: "#1F6FEB22", borderWidth: 1, borderColor: "#58A6FF88", borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6 },
+  crealoBtnText: { color: "#58A6FF", fontSize: 13, fontWeight: "600" },
   tabs: { flexDirection: "row", gap: 10, marginVertical: 16 },
   tab: { flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: c.card, borderWidth: 1, borderColor: c.cardBorder, alignItems: "center" },
   tabActive: { backgroundColor: "#1F6FEB22", borderColor: "#58A6FF" },
@@ -1147,6 +1982,7 @@ function makeSStyles(c: any) { return StyleSheet.create({
   quickBtns: { gap: 6, marginTop: 4 },
   quickBtn: { backgroundColor: c.card, borderWidth: 1, borderColor: c.cardBorder, borderRadius: 12, padding: 12, alignItems: "center" },
   quickBtnText: { color: c.textMuted, fontSize: 13 },
+
   noResultsWrap: { gap: 8, alignItems: "center", paddingTop: 8 },
   notFoundBanner: { backgroundColor: c.card, borderWidth: 1, borderColor: c.cardBorder, borderRadius: 16, padding: 20, marginTop: 20, gap: 12, alignItems: "center" },
   notFoundTitle: { color: c.text, fontSize: 16, fontWeight: "700" },
@@ -1182,6 +2018,7 @@ function makeSStyles(c: any) { return StyleSheet.create({
   envaseAutoLabel: { color: c.textSub, fontSize: 13, fontWeight: "600" },
   envaseAutoHint: { color: c.textMuted, fontSize: 10, marginTop: 2 },
   envaseManualLink: { color: c.textMuted, fontSize: 11, textAlign: "center" },
+  envaseWrapCompact: { marginTop: 2 },
   envaseBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: c.bg, borderWidth: 1, borderColor: c.cardBorder, borderRadius: 10, padding: 10 },
   envaseBtnText: { color: c.textMuted, fontSize: 13 },
   envaseWrap: { backgroundColor: c.bg, borderRadius: 12, padding: 14, gap: 12 },
