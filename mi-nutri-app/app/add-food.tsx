@@ -1788,26 +1788,26 @@ function QuantitySelector({ producto, pesoEnvaseNum, nombreEnvaseCustom, onGramo
   const [selKey, setSelKey]   = useState(chips[0]?.key ?? "g");
   const [qty,    setQty]      = useState(1);
   const [gramTxt, setGramTxt] = useState("100");
-  const [gramFocused, setGramFocused] = useState(false);
   const [foodUnit, setFoodUnit] = useState<FoodUnit>("g");
+  const totalRef = useRef<number>(100); // ref para leer el valor actual sin closure stale
 
   const sel   = chips.find(c => c.key === selKey) ?? chips[chips.length - 1];
   const total = sel.isGram
-    ? Math.round((Number(gramTxt) || 0) * FOOD_UNIT_GRAMS[foodUnit])
+    ? Math.round(parseFloat((((Number(gramTxt) || 0) * FOOD_UNIT_GRAMS[foodUnit]).toFixed(4))))
     : sel.hasQty
       ? Math.round(sel.grams * qty)
       : sel.grams;
 
+  totalRef.current = total;
+
   const changeFoodUnit = (newUnit: FoodUnit) => {
-    const currentGrams = Math.round((Number(gramTxt) || 0) * FOOD_UNIT_GRAMS[foodUnit]);
+    const currentGrams = Math.round(parseFloat((((Number(gramTxt) || 0) * FOOD_UNIT_GRAMS[foodUnit]).toFixed(4))));
     setGramTxt(String(+fromGrams(currentGrams, newUnit).toFixed(2)));
     setFoodUnit(newUnit);
   };
 
-  useEffect(() => {
-    // No disparar mientras el usuario está escribiendo en el campo de gramos
-    if (gramFocused && sel.isGram) return;
-    const unitName = sel.topLine.replace(/^\d+\s+/, ""); // "1 baguette" → "baguette"
+  const notifyParent = (t: number) => {
+    const unitName = sel.topLine.replace(/^\d+\s+/, "");
     const label = sel.isGram ? undefined
       : sel.hasQty ? `${qty} ${unitName}`.trim()
       : sel.topLine;
@@ -1816,9 +1816,13 @@ function QuantitySelector({ producto, pesoEnvaseNum, nombreEnvaseCustom, onGramo
       : -1;
     const porcionIdxFinal = porcionIdx >= 0 ? porcionIdx : null;
     const porcionCantidad = porcionIdxFinal !== null ? String(qty) : "";
-    onGramosChange(Math.max(1, total), label || undefined, porcionIdxFinal, porcionCantidad);
+    onGramosChange(Math.max(1, t), label || undefined, porcionIdxFinal, porcionCantidad);
+  };
+
+  useEffect(() => {
+    notifyParent(total);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [total, sel.key, qty, gramFocused]);
+  }, [total, sel.key, qty]);
 
   const pick = (key: string) => {
     setSelKey(key);
@@ -1903,8 +1907,6 @@ function QuantitySelector({ producto, pesoEnvaseNum, nombreEnvaseCustom, onGramo
                 { color: colors.text, borderColor: colors.cardBorder, backgroundColor: colors.card }]}
               value={gramTxt}
               onChangeText={v => { setGramTxt(v.replace(",", ".").replace(/[^0-9.]/g, "")); }}
-              onFocus={() => setGramFocused(true)}
-              onBlur={() => setGramFocused(false)}
               keyboardType="decimal-pad"
               selectTextOnFocus
             />
