@@ -1451,7 +1451,15 @@ export default function AddFoodScreen() {
       signalMealSaved(meals, targetKey);
 
       setGuardado(true);
-      setTimeout(() => router.back(), 600);
+      setTimeout(() => {
+        // Volver al estado inicial para añadir otro alimento
+        setProducto(null);
+        setBusqueda("");
+        setResultados([]);
+        setGramos("100");
+        setSaveError(null);
+        setGuardado(false);
+      }, 800);
     } catch (e: any) {
       setSaveError(e?.message ?? t.saveErrorMsg);
     }
