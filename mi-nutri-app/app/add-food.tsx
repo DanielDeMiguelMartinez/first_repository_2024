@@ -906,25 +906,16 @@ export default function AddFoodScreen() {
       .sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
     if (recientesCoinciden.length === 0) return lista;
 
-    const nombresRecientes = new Set(recientesCoinciden.map(r => r.nombre.toLowerCase()));
-    // Marcar los que ya están en la lista como isRecent
-    const listaConFlag = lista.map(p =>
-      nombresRecientes.has(p.nombre.toLowerCase()) ? { ...p, isRecent: true } : p
-    );
-    // Recientes que NO están en la lista los añadimos como productos
     const nombresLista = new Set(lista.map(p => p.nombre.toLowerCase()));
-    const recientesNuevos: Producto[] = recientesCoinciden
-      .filter(r => !nombresLista.has(r.nombre.toLowerCase()))
+
+    // Recientes que coinciden: siempre usamos los datos del historial (supermercado, nutrientes, etc.)
+    const recientesProductos: Producto[] = recientesCoinciden
       .map(r => ({ ...r, isRecent: true } as unknown as Producto));
 
-    const sinRecientes = listaConFlag.filter(p => !p.isRecent);
-    const conRecientes = listaConFlag.filter(p => p.isRecent)
-      .sort((a, b) => {
-        const ra = recentFoods.find(r => r.nombre.toLowerCase() === a.nombre.toLowerCase());
-        const rb = recentFoods.find(r => r.nombre.toLowerCase() === b.nombre.toLowerCase());
-        return (rb?.addedAt ?? 0) - (ra?.addedAt ?? 0);
-      });
-    return [...recientesNuevos, ...conRecientes, ...sinRecientes];
+    // El resto de la lista sin los que ya están como recientes
+    const sinRecientes = lista.filter(p => !recientesCoinciden.some(r => r.nombre.toLowerCase() === p.nombre.toLowerCase()));
+
+    return [...recientesProductos, ...sinRecientes];
   };
 
   const buscarConDebounce = (texto: string) => {
