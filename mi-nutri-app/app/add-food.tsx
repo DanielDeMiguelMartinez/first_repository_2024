@@ -58,6 +58,7 @@ type Producto = {
   porciones?: Porcion[];
   codigoBarras?: string;
   scanCount?: number;  // popularidad: veces escaneado en la comunidad
+  isRecent?: boolean;  // coincide con un alimento usado recientemente
 };
 
 /** Devuelve el nombre de la unidad del envase según el tipo de producto */
@@ -570,6 +571,7 @@ const SwipeableFoodItem = memo(function SwipeableFoodItem({
         <TouchableOpacity style={sw.itemInner} onPress={() => onSelect(prod)} activeOpacity={0.7}>
           <View style={sw.left}>
             <View style={sw.nameRow}>
+              {prod.isRecent && <Text style={{ fontSize: 14, marginRight: 4 }}>🕐</Text>}
               <Text style={sw.name} numberOfLines={1}>{prod.nombre}</Text>
               {prod.esPersonalizado && <View style={sw.customBadge}><Text style={sw.customBadgeText}>{t.customBadge}</Text></View>}
               {alergenoEncontrado && (
@@ -896,6 +898,35 @@ export default function AddFoodScreen() {
   const caloriasCalculadas = macros ? macros.calorias.toFixed(0) : "0";
   const superColor = producto ? (SUPER_COLORS[producto.supermercado] || "#4B5563") : "#4B5563";
 
+  // Marca recientes y los sube al principio, manteniendo el orden del resto
+  const mezclarConRecientes = (lista: Producto[], q: string): Producto[] => {
+    const q2 = q.toLowerCase();
+    const recientesCoinciden = recentFoods
+      .filter(r => r.nombre.toLowerCase().includes(q2))
+      .sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
+    if (recientesCoinciden.length === 0) return lista;
+
+    const nombresRecientes = new Set(recientesCoinciden.map(r => r.nombre.toLowerCase()));
+    // Marcar los que ya están en la lista como isRecent
+    const listaConFlag = lista.map(p =>
+      nombresRecientes.has(p.nombre.toLowerCase()) ? { ...p, isRecent: true } : p
+    );
+    // Recientes que NO están en la lista los añadimos como productos
+    const nombresLista = new Set(lista.map(p => p.nombre.toLowerCase()));
+    const recientesNuevos: Producto[] = recientesCoinciden
+      .filter(r => !nombresLista.has(r.nombre.toLowerCase()))
+      .map(r => ({ ...r, isRecent: true } as unknown as Producto));
+
+    const sinRecientes = listaConFlag.filter(p => !p.isRecent);
+    const conRecientes = listaConFlag.filter(p => p.isRecent)
+      .sort((a, b) => {
+        const ra = recentFoods.find(r => r.nombre.toLowerCase() === a.nombre.toLowerCase());
+        const rb = recentFoods.find(r => r.nombre.toLowerCase() === b.nombre.toLowerCase());
+        return (rb?.addedAt ?? 0) - (ra?.addedAt ?? 0);
+      });
+    return [...recientesNuevos, ...conRecientes, ...sinRecientes];
+  };
+
   const buscarConDebounce = (texto: string) => {
     setBusqueda(texto);
     setProducto(null);
@@ -906,19 +937,15 @@ export default function AddFoodScreen() {
 
     // 1. Cache en memoria — instantáneo si ya se buscó antes en esta sesión
     const cached = getMemCached(texto);
-    if (cached) { setResultados(cached); setCargando(false); return; }
+    if (cached) { setResultados(mezclarConRecientes(cached, texto)); setCargando(false); return; }
 
     // 2. Locales hardcoded — inmediato mientras carga BD
-    // Solo reemplaza si hay locales relevantes; si no, mantiene resultados anteriores
     const locales = rankear(texto, ALIMENTOS_BASICOS);
-    if (locales.length > 0) setResultados(locales);
+    if (locales.length > 0) setResultados(mezclarConRecientes(locales, texto));
     setCargando(true);
 
     debounceRef.current = setTimeout(async () => {
       if (currentSearch.current !== texto) return;
-
-      // Buscar siempre con el texto exacto que escribió el usuario (sin corrección ni sinónimos)
-      // para que "pollo" devuelva solo alimentos que contienen "pollo", nada más.
 
       // 3. D1/Supabase — búsqueda por texto literal del usuario
       try {
@@ -937,10 +964,9 @@ export default function AddFoodScreen() {
         if (productos.length > 0) {
           const rankeados = rankear(texto, productos);
           if (rankeados.length > 0 && currentSearch.current === texto) {
-            // BD al principio, locales sin duplicar al final
             const nombresDB = new Set(rankeados.map(r => r.nombre.toLowerCase()));
             const localesSinDup = locales.filter(l => !nombresDB.has(l.nombre.toLowerCase()));
-            const merged = [...rankeados, ...localesSinDup];
+            const merged = mezclarConRecientes([...rankeados, ...localesSinDup], texto);
             setResultados(merged);
             setMemCached(texto, merged);
             scrollRef.current?.scrollTo?.({ y: 0, animated: false });
@@ -950,7 +976,7 @@ export default function AddFoodScreen() {
 
       if (currentSearch.current !== texto) return;
 
-      // 4. APIs externas (OFF / USDA) — usa query corregida para mejores resultados
+      // 4. APIs externas (OFF / USDA)
       try {
         await buscarProductosPorNombre(texto, (nuevos) => {
           if (currentSearch.current !== texto) return;
@@ -958,8 +984,7 @@ export default function AddFoodScreen() {
             const vistosPrev = new Set(prev.map(p => p.nombre.toLowerCase()));
             const sinDup = nuevos.filter(n => !vistosPrev.has(n.nombre.toLowerCase()));
             if (sinDup.length === 0) return prev;
-            // Re-rankear todo: los más relevantes siempre arriba
-            const todo = rankear(texto, [...prev, ...sinDup]);
+            const todo = mezclarConRecientes(rankear(texto, [...prev, ...sinDup]), texto);
             setMemCached(texto, todo);
             return todo;
           });
