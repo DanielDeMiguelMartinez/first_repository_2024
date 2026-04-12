@@ -6,8 +6,16 @@ import {
   Modal, ScrollView, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 
-export type MealKey = "desayuno" | "comida" | "merienda" | "cena";
-export const MEAL_ICONS: Record<MealKey, string> = { desayuno: "🌅", comida: "☀️", merienda: "🍎", cena: "🌙" };
+export type MealKey = "desayuno" | "snack1" | "comida" | "merienda" | "cena" | "snack2";
+export const MEAL_ICONS: Record<MealKey, string> = { desayuno: "🌅", snack1: "🥜", comida: "☀️", merienda: "🍎", cena: "🌙", snack2: "🥛" };
+
+const FREQUENCY_MEALS: Record<string, MealKey[]> = {
+  "2":  ["comida", "cena"],
+  "3":  ["desayuno", "comida", "cena"],
+  "4":  ["desayuno", "comida", "merienda", "cena"],
+  "5":  ["desayuno", "snack1", "comida", "merienda", "cena"],
+  "6":  ["desayuno", "snack1", "comida", "merienda", "cena", "snack2"],
+};
 
 function safeNum(val: any): number {
   const n = Number(val);
@@ -27,7 +35,11 @@ export function AnadirRecetaModal({
   dateKey?: string;
 }) {
   const { t, colors } = useApp();
-  const MEAL_LABELS: Record<MealKey, string> = { desayuno: t.breakfast, comida: t.lunch, merienda: t.snack, cena: t.dinner };
+  const MEAL_LABELS: Record<MealKey, string> = { desayuno: t.breakfast, snack1: t.snack1Label, comida: t.lunch, merienda: t.snack, cena: t.dinner, snack2: t.snack2Label };
+  const [mealFreq, setMealFreq] = useState("4");
+  const visibleMeals: MealKey[] = mealFreq.includes(",")
+    ? mealFreq.split(",") as MealKey[]
+    : FREQUENCY_MEALS[mealFreq] ?? FREQUENCY_MEALS["4"];
   const [racionesBase, setRacionesBase] = useState(1);
   const [racionesAnadir, setRacionesAnadir] = useState(1);
   const [ingModifs, setIngModifs] = useState<{ gramos: number; pinned: boolean }[]>([]);
@@ -36,7 +48,10 @@ export function AnadirRecetaModal({
   const [mealSel, setMealSel] = useState<MealKey>(initialMeal ?? "comida");
 
   useEffect(() => {
-    if (visible) setMealSel(initialMeal ?? "comida");
+    if (visible) {
+      setMealSel(initialMeal ?? "comida");
+      AsyncStorage.getItem("nutri_meal_frequency").then(v => { if (v) setMealFreq(v); });
+    }
   }, [visible]);
 
   useEffect(() => {
@@ -266,7 +281,7 @@ export function AnadirRecetaModal({
             <View style={{ paddingHorizontal: 14, paddingBottom: 10 }}>
               <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>{t.whichMealToAdd}</Text>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                {(["desayuno", "comida", "merienda", "cena"] as MealKey[]).map(m => (
+                {visibleMeals.map(m => (
                   <TouchableOpacity key={m}
                     style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 20, backgroundColor: mealSel === m ? "#1F6FEB22" : colors.bg, borderWidth: 1, borderColor: mealSel === m ? "#58A6FF" : colors.cardBorder }}
                     onPress={() => setMealSel(m)}>

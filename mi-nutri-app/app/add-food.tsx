@@ -14,10 +14,12 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, FlatList, Keyboard, Platform,
+  ActivityIndicator, Alert, FlatList, Image, Keyboard, Platform,
   SafeAreaView, ScrollView, StatusBar, StyleSheet, Text,
   TextInput, TouchableOpacity, View,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import { CameraView, useCameraPermissions } from "expo-camera";
 
 function getTodayKey(): string {
   const d = new Date();
@@ -30,9 +32,16 @@ const SEARCH_CACHE_KEY = "nutri_search_cache_v1"; // kept for legacy cleanup onl
 // País detectado una sola vez al iniciar (no cambia durante la sesión)
 const PAIS_USUARIO = detectarPaisUsuario();
 
-type MealKey = "desayuno" | "comida" | "merienda" | "cena";
-const MEAL_LABELS: Record<MealKey, string> = { desayuno: "Desayuno", comida: "Comida", merienda: "Merienda", cena: "Cena" };
-const MEAL_ICONS: Record<MealKey, string> = { desayuno: "🌅", comida: "☀️", merienda: "🍎", cena: "🌙" };
+type MealKey = "desayuno" | "snack1" | "comida" | "merienda" | "cena" | "snack2";
+const ALL_MEAL_ICONS: Record<MealKey, string> = { desayuno: "🌅", snack1: "🥜", comida: "☀️", merienda: "🍎", cena: "🌙", snack2: "🥛" };
+
+const FREQUENCY_MEALS: Record<string, MealKey[]> = {
+  "2":  ["comida", "cena"],
+  "3":  ["desayuno", "comida", "cena"],
+  "4":  ["desayuno", "comida", "merienda", "cena"],
+  "5":  ["desayuno", "snack1", "comida", "merienda", "cena"],
+  "6":  ["desayuno", "snack1", "comida", "merienda", "cena", "snack2"],
+};
 
 const SUPER_COLORS: Record<string, string> = {
   Mercadona: "#00A651", Carrefour: "#004A97", Lidl: "#0050AA",
@@ -618,7 +627,7 @@ function SkeletonFoodItem({ colors }: { colors: any }) {
 }
 
 export default function AddFoodScreen() {
-  const { colors, theme, t, isOnline } = useApp();
+  const { colors, theme, t, language, isOnline } = useApp();
   const s = useMemo(() => makeSStyles(colors), [colors]);
   const { code, meal: mealParam, storageKey: storageKeyParam } = useLocalSearchParams<{ code?: string; meal?: MealKey; storageKey?: string }>();
 
@@ -635,7 +644,7 @@ export default function AddFoodScreen() {
     : "";
   const router = useRouter();
 
-  const [tab, setTab] = useState<"nombre" | "codigo">("nombre");
+  const [tab, setTab] = useState<"nombre" | "codigo" | "foto">("nombre");
   const [historialTab, setHistorialTab] = useState<"recientes" | "favoritos">("recientes");
   const [busqueda, setBusqueda] = useState("");
   const [codigo, setCodigo] = useState(code || "");
@@ -646,6 +655,34 @@ export default function AddFoodScreen() {
   const [porcionUsadaIdx, setPorcionUsadaIdx] = useState<number | null>(null);
   const [porcionUsadaCantidad, setPorcionUsadaCantidad] = useState<string>("");
   const [mealSeleccionada, setMealSeleccionada] = useState<MealKey>((mealParam as MealKey) || "desayuno");
+  const [mealFreq, setMealFreq] = useState("4");
+  const visibleMeals: MealKey[] = mealFreq.includes(",")
+    ? mealFreq.split(",") as MealKey[]
+    : FREQUENCY_MEALS[mealFreq] ?? FREQUENCY_MEALS["4"];
+  // Foto AI
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photoAnalysis, setPhotoAnalysis] = useState<any>(null);
+  const [analyzingPhoto, setAnalyzingPhoto] = useState(false);
+  const [photoError, setPhotoError] = useState("");
+  const [camPermission, requestCamPermission] = useCameraPermissions();
+  const foodCamRef = useRef<any>(null);
+
+  const analyzePhoto = async (base64: string, uri: string) => {
+    setPhotoUri(uri);
+    setAnalyzingPhoto(true); setPhotoError(""); setPhotoAnalysis(null);
+    try {
+      const baseUrl = Platform.OS === "web" ? "" : (process.env.EXPO_PUBLIC_API_URL || "https://mi-nutri-app-theta.vercel.app");
+      const res = await fetch(`${baseUrl}/api/analyze-food-photo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: base64, language }),
+      });
+      if (!res.ok) { setPhotoError(t.photoAnalysisError); setAnalyzingPhoto(false); return; }
+      const data = await res.json();
+      setPhotoAnalysis(data);
+    } catch { setPhotoError(t.photoAnalysisError); }
+    setAnalyzingPhoto(false);
+  };
   const [cargando, setCargando] = useState(false);
   const [guardado, setGuardado] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -668,7 +705,7 @@ export default function AddFoodScreen() {
   // MediaRecorder para el fallback Firefox
   const mediaRecorderRef = useRef<any>(null);
 
-  useEffect(() => { cargarDatos(); }, []);
+  useEffect(() => { cargarDatos(); AsyncStorage.getItem("nutri_meal_frequency").then(v => { if (v) setMealFreq(v); }); }, []);
 
   // Recargar recientes cada vez que la pantalla recibe el foco (ej. volver de añadir al día)
   useFocusEffect(useCallback(() => {
@@ -1443,7 +1480,7 @@ export default function AddFoodScreen() {
     try {
       // 1. Guardar en AsyncStorage
       const stored = await AsyncStorage.getItem(targetKey);
-      const base = { desayuno: [] as any[], comida: [] as any[], merienda: [] as any[], cena: [] as any[] };
+      const base = { desayuno: [] as any[], snack1: [] as any[], comida: [] as any[], merienda: [] as any[], cena: [] as any[], snack2: [] as any[] };
       const meals = stored ? { ...base, ...JSON.parse(stored) } : base;
       meals[mealSeleccionada] = [...(meals[mealSeleccionada] ?? []), entradaComida];
       await AsyncStorage.setItem(targetKey, JSON.stringify(meals));
@@ -1494,7 +1531,6 @@ export default function AddFoodScreen() {
           <Text style={[s.historialTabText, historialTab === "favoritos" && s.historialTabTextActive]}>{t.favorites}</Text>
         </TouchableOpacity>
       </View>
-      {listaHistorial.length > 0 && <Text style={s.swipeHint}>{t.swipeToFav}</Text>}
       {listaHistorial.length === 0 ? (
         <Text style={s.emptyHistory}>
           {historialTab === "recientes" ? t.noRecentFoods : t.noFavorites}
@@ -1531,10 +1567,13 @@ export default function AddFoodScreen() {
       </View>
       <View style={s.tabs}>
         <TouchableOpacity style={[s.tab, tab === "nombre" && s.tabActive]} onPress={() => { setTab("nombre"); setProducto(null); setResultados([]); setBusqueda(""); setCodigoNoEncontrado(null); }}>
-          <Text style={[s.tabText, tab === "nombre" && s.tabTextActive]}>{t.byName}</Text>
+          <Text style={[s.tabText, tab === "nombre" && s.tabTextActive]}>🔍 {t.byName}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[s.tab, tab === "codigo" && s.tabActive]} onPress={() => { setTab("codigo"); setProducto(null); setResultados([]); setCodigoNoEncontrado(null); }}>
-          <Text style={[s.tabText, tab === "codigo" && s.tabTextActive]}>{t.byBarcode}</Text>
+          <Text style={[s.tabText, tab === "codigo" && s.tabTextActive]}>📦 {t.byBarcode}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[s.tab, tab === "foto" && s.tabActive]} onPress={() => { setTab("foto"); setProducto(null); setResultados([]); setPhotoAnalysis(null); setPhotoUri(null); setPhotoError(""); }}>
+          <Text style={[s.tabText, tab === "foto" && s.tabTextActive]}>📸 {t.byPhoto}</Text>
         </TouchableOpacity>
       </View>
     </>
@@ -1649,6 +1688,213 @@ export default function AddFoodScreen() {
           </View>
         )}
 
+        {/* ── Tab: Por Foto — Cámara en vivo ── */}
+        {tab === "foto" && !producto && !photoAnalysis && !analyzingPhoto && (
+          <View style={{ flex: 1, backgroundColor: "#000", borderRadius: 20, overflow: "hidden", marginHorizontal: -16, marginTop: -8, minHeight: 400 }}>
+            {Platform.OS !== "web" && camPermission?.granted ? (
+              <CameraView ref={foodCamRef} style={{ flex: 1 }} facing="back">
+                {/* Overlay: guía visual */}
+                <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+                  <View style={{ width: "80%", aspectRatio: 1, borderRadius: 24, borderWidth: 2, borderColor: "rgba(255,255,255,0.25)", borderStyle: "dashed" }} />
+                  <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, fontWeight: "600", marginTop: 12 }}>{t.takePhotoOfFood}</Text>
+                </View>
+                {/* Controles abajo */}
+                <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, paddingBottom: 24, paddingHorizontal: 20, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+                  {/* Galería — abajo izquierda */}
+                  <TouchableOpacity
+                    style={{ position: "absolute", left: 20, bottom: 24, width: 48, height: 48, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.15)", borderWidth: 1, borderColor: "rgba(255,255,255,0.3)", alignItems: "center", justifyContent: "center" }}
+                    onPress={async () => {
+                      const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.7, base64: true, mediaTypes: ImagePicker.MediaTypeOptions.Images });
+                      if (result.canceled || !result.assets?.[0]) return;
+                      analyzePhoto(result.assets[0].base64!, result.assets[0].uri);
+                    }}>
+                    <Text style={{ fontSize: 22 }}>🖼</Text>
+                  </TouchableOpacity>
+                  {/* Botón captura — centro */}
+                  <TouchableOpacity
+                    style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: "#fff", borderWidth: 4, borderColor: "rgba(255,255,255,0.4)", alignItems: "center", justifyContent: "center" }}
+                    onPress={async () => {
+                      if (!foodCamRef.current) return;
+                      const photo = await foodCamRef.current.takePictureAsync({ quality: 0.7, base64: true });
+                      if (photo?.base64) analyzePhoto(photo.base64, photo.uri);
+                    }}>
+                    <View style={{ width: 58, height: 58, borderRadius: 29, backgroundColor: "#fff" }} />
+                  </TouchableOpacity>
+                </View>
+              </CameraView>
+            ) : Platform.OS !== "web" && !camPermission?.granted ? (
+              <View style={{ flex: 1, justifyContent: "center", alignItems: "center", gap: 16, padding: 32 }}>
+                <Text style={{ fontSize: 52 }}>📸</Text>
+                <Text style={{ color: "#fff", fontSize: 16, fontWeight: "700", textAlign: "center" }}>{t.takePhotoOfFood}</Text>
+                <TouchableOpacity onPress={requestCamPermission}
+                  style={{ backgroundColor: "#8B5CF6", borderRadius: 14, paddingHorizontal: 24, paddingVertical: 14 }}>
+                  <Text style={{ color: "#fff", fontWeight: "800" }}>{t.grantPermissions}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{ marginTop: 8, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "rgba(255,255,255,0.1)", borderRadius: 14, paddingHorizontal: 20, paddingVertical: 12 }}
+                  onPress={async () => {
+                    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.7, base64: true, mediaTypes: ImagePicker.MediaTypeOptions.Images });
+                    if (result.canceled || !result.assets?.[0]) return;
+                    analyzePhoto(result.assets[0].base64!, result.assets[0].uri);
+                  }}>
+                  <Text style={{ fontSize: 18 }}>🖼</Text>
+                  <Text style={{ color: "#fff", fontWeight: "600" }}>{t.gallery}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              /* Web: no hay cámara nativa, mostrar botones */
+              <View style={{ flex: 1, justifyContent: "center", alignItems: "center", gap: 20, padding: 32, minHeight: 300 }}>
+                <Text style={{ fontSize: 64 }}>📸</Text>
+                <Text style={{ color: "#fff", fontSize: 16, fontWeight: "700", textAlign: "center" }}>{t.takePhotoOfFood}</Text>
+                <View style={{ flexDirection: "row", gap: 12, width: "100%", maxWidth: 320 }}>
+                  <TouchableOpacity
+                    style={{ flex: 1, backgroundColor: "#8B5CF6", borderRadius: 14, paddingVertical: 16, alignItems: "center", gap: 6 }}
+                    onPress={async () => {
+                      const result = await ImagePicker.launchCameraAsync({ quality: 0.7, base64: true });
+                      if (result.canceled || !result.assets?.[0]) return;
+                      analyzePhoto(result.assets[0].base64!, result.assets[0].uri);
+                    }}>
+                    <Text style={{ fontSize: 28 }}>📸</Text>
+                    <Text style={{ color: "#fff", fontWeight: "700" }}>{t.camera}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{ flex: 1, backgroundColor: "rgba(255,255,255,0.1)", borderRadius: 14, paddingVertical: 16, alignItems: "center", gap: 6, borderWidth: 1, borderColor: "rgba(255,255,255,0.2)" }}
+                    onPress={async () => {
+                      const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.7, base64: true, mediaTypes: ImagePicker.MediaTypeOptions.Images });
+                      if (result.canceled || !result.assets?.[0]) return;
+                      analyzePhoto(result.assets[0].base64!, result.assets[0].uri);
+                    }}>
+                    <Text style={{ fontSize: 28 }}>🖼</Text>
+                    <Text style={{ color: "#fff", fontWeight: "700" }}>{t.gallery}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+            {photoError ? (
+              <View style={{ position: "absolute", bottom: 100, left: 20, right: 20, backgroundColor: "#EF444499", borderRadius: 12, padding: 12, alignItems: "center" }}>
+                <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>⚠️ {photoError}</Text>
+              </View>
+            ) : null}
+          </View>
+        )}
+
+        {/* ── Analizando foto ── */}
+        {tab === "foto" && analyzingPhoto && (
+          <View style={{ alignItems: "center", gap: 20, paddingVertical: 32 }}>
+            {photoUri && (
+              <View style={{ width: 220, height: 220, borderRadius: 20, overflow: "hidden", borderWidth: 2, borderColor: "#8B5CF644" }}>
+                <Image source={{ uri: photoUri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+              </View>
+            )}
+            <ActivityIndicator size="large" color="#8B5CF6" />
+            <Text style={{ color: colors.text, fontSize: 17, fontWeight: "800" }}>{t.analyzingPhoto}</Text>
+            <Text style={{ color: colors.textMuted, fontSize: 12 }}>🤖 AI</Text>
+          </View>
+        )}
+
+        {/* ── Resultados del análisis ── */}
+        {tab === "foto" && photoAnalysis && !producto && (
+          <View style={{ gap: 14 }}>
+            {/* Foto + descripción */}
+            {photoUri && (
+              <View style={{ borderRadius: 20, overflow: "hidden", borderWidth: 1, borderColor: colors.cardBorder }}>
+                <Image source={{ uri: photoUri }} style={{ width: "100%", aspectRatio: 4/3 }} resizeMode="cover" />
+              </View>
+            )}
+            {photoAnalysis.description && (
+              <Text style={{ color: colors.textSub, fontSize: 13, fontStyle: "italic", paddingHorizontal: 4 }}>{photoAnalysis.description}</Text>
+            )}
+
+            {/* Totales */}
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              {[
+                { val: photoAnalysis.totals?.kcal, label: "kcal", color: "#4ADE80" },
+                { val: `${photoAnalysis.totals?.protein}g`, label: t.proteins, color: "#60A5FA" },
+                { val: `${photoAnalysis.totals?.carbs}g`, label: t.carbs, color: "#FBBF24" },
+                { val: `${photoAnalysis.totals?.fat}g`, label: t.fats, color: "#F87171" },
+              ].map(m => (
+                <View key={m.label} style={{ flex: 1, backgroundColor: colors.card, borderRadius: 12, padding: 10, alignItems: "center", borderWidth: 1, borderColor: colors.cardBorder }}>
+                  <Text style={{ color: m.color, fontSize: 16, fontWeight: "800" }}>{m.val}</Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 9 }}>{m.label}</Text>
+                </View>
+              ))}
+            </View>
+
+            {/* Items detectados */}
+            {(photoAnalysis.items ?? []).map((item: any, idx: number) => (
+              <View key={idx} style={{ backgroundColor: colors.card, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: colors.cardBorder, gap: 4 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Text style={{ color: colors.text, fontSize: 14, fontWeight: "700", flex: 1 }}>{item.name}</Text>
+                  <View style={{ backgroundColor: colors.bg, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 }}>
+                    <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: "600" }}>{item.grams}g</Text>
+                  </View>
+                </View>
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 2 }}>
+                  <Text style={{ color: "#4ADE80", fontSize: 11, fontWeight: "700" }}>{item.kcal} kcal</Text>
+                  <Text style={{ color: "#60A5FA", fontSize: 11 }}>{item.protein}g P</Text>
+                  <Text style={{ color: "#FBBF24", fontSize: 11 }}>{item.carbs}g C</Text>
+                  <Text style={{ color: "#F87171", fontSize: 11 }}>{item.fat}g G</Text>
+                </View>
+              </View>
+            ))}
+
+            {/* Selector de comida */}
+            <View style={s.mealSelector}>
+              {visibleMeals.map((m) => {
+                const label = m === "desayuno" ? t.breakfast : m === "comida" ? t.lunch : m === "merienda" ? t.snack : m === "cena" ? t.dinner : m === "snack1" ? t.snack1Label : t.snack2Label;
+                return (
+                  <TouchableOpacity key={m} style={[s.mealChip, mealSeleccionada === m && s.mealChipActive]} onPress={() => setMealSeleccionada(m)}>
+                    <Text style={s.mealChipIcon}>{ALL_MEAL_ICONS[m]}</Text>
+                    <Text style={[s.mealChipText, mealSeleccionada === m && s.mealChipTextActive]}>{label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Añadir todo */}
+            <TouchableOpacity
+              style={{ backgroundColor: "#4ADE80", borderRadius: 16, paddingVertical: 16, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 }}
+              onPress={async () => {
+                const key = storageKeyParam || STORAGE_KEY;
+                const stored = await AsyncStorage.getItem(key);
+                const base = { desayuno: [] as any[], snack1: [] as any[], comida: [] as any[], merienda: [] as any[], cena: [] as any[], snack2: [] as any[] };
+                const currentMeals = stored ? { ...base, ...JSON.parse(stored) } : base;
+                const mk = mealSeleccionada;
+                const newEntries = (photoAnalysis.items ?? []).map((item: any) => ({
+                  id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                  name: item.name,
+                  calories: Math.round(item.kcal ?? 0),
+                  protein: Math.round((item.protein ?? 0) * 10) / 10,
+                  carbs: Math.round((item.carbs ?? 0) * 10) / 10,
+                  fat: Math.round((item.fat ?? 0) * 10) / 10,
+                  per100: item.grams > 0 ? {
+                    calories: Math.round((item.kcal / item.grams) * 100),
+                    protein: Math.round(((item.protein ?? 0) / item.grams) * 1000) / 10,
+                    carbs: Math.round(((item.carbs ?? 0) / item.grams) * 1000) / 10,
+                    fat: Math.round(((item.fat ?? 0) / item.grams) * 1000) / 10,
+                    saturatedFat: 0, sugar: 0, fiber: 0, salt: 0,
+                  } : undefined,
+                }));
+                currentMeals[mk] = [...(currentMeals[mk] ?? []), ...newEntries];
+                await AsyncStorage.setItem(key, JSON.stringify(currentMeals));
+                syncDayToCloud(key, currentMeals);
+                signalMealSaved();
+                setGuardado(true);
+                Alert.alert("✅", `${newEntries.length} ${t.addAllItems}`);
+                setTimeout(() => router.back(), 600);
+              }}>
+              <Text style={{ color: "#000", fontSize: 16, fontWeight: "900" }}>✅ {t.addAllItems}</Text>
+            </TouchableOpacity>
+
+            {/* Nueva foto */}
+            <TouchableOpacity
+              style={{ borderRadius: 14, paddingVertical: 12, alignItems: "center", borderWidth: 1, borderColor: colors.cardBorder }}
+              onPress={() => { setPhotoAnalysis(null); setPhotoUri(null); setPhotoError(""); }}>
+              <Text style={{ color: colors.textSub, fontSize: 13, fontWeight: "700" }}>📸 {t.takePhotoOfFood}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {producto && (
           <View style={s.productCard}>
             <View style={s.productHeader}>
@@ -1748,12 +1994,15 @@ export default function AddFoodScreen() {
               </View>
             )}
             <View style={s.mealSelector}>
-              {(Object.keys(MEAL_LABELS) as MealKey[]).map((m) => (
-                <TouchableOpacity key={m} style={[s.mealChip, mealSeleccionada === m && s.mealChipActive]} onPress={() => setMealSeleccionada(m)}>
-                  <Text style={s.mealChipIcon}>{MEAL_ICONS[m]}</Text>
-                  <Text style={[s.mealChipText, mealSeleccionada === m && s.mealChipTextActive]}>{m === "desayuno" ? t.breakfast : m === "comida" ? t.lunch : m === "merienda" ? t.snack : t.dinner}</Text>
-                </TouchableOpacity>
-              ))}
+              {visibleMeals.map((m) => {
+                const label = m === "desayuno" ? t.breakfast : m === "comida" ? t.lunch : m === "merienda" ? t.snack : m === "cena" ? t.dinner : m === "snack1" ? t.snack1Label : t.snack2Label;
+                return (
+                  <TouchableOpacity key={m} style={[s.mealChip, mealSeleccionada === m && s.mealChipActive]} onPress={() => setMealSeleccionada(m)}>
+                    <Text style={s.mealChipIcon}>{ALL_MEAL_ICONS[m]}</Text>
+                    <Text style={[s.mealChipText, mealSeleccionada === m && s.mealChipTextActive]}>{label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
             {saveError && (
               <View style={{ backgroundColor: "#EF444422", borderRadius: 10, padding: 12, borderWidth: 1, borderColor: "#EF444455", marginBottom: 8 }}>

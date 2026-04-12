@@ -1,4 +1,5 @@
 import { useApp } from "@/app/services/i18n";
+import { syncDayToCloud } from "@/app/services/cloudSync";
 import { signalMealSaved } from "@/app/services/refreshSignal";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -15,7 +16,7 @@ import {
   View,
 } from "react-native";
 
-type MealKey = "desayuno" | "comida" | "merienda" | "cena";
+type MealKey = "desayuno" | "snack1" | "comida" | "merienda" | "cena" | "snack2";
 
 function getTodayKey(): string {
   const d = new Date();
@@ -23,7 +24,7 @@ function getTodayKey(): string {
 }
 
 export default function EditFoodScreen() {
-  const { colors, theme } = useApp();
+  const { colors, theme, t } = useApp();
   const { meal, foodId, foodData, storageKey: storageKeyParam } = useLocalSearchParams<{
     meal: MealKey;
     foodId: string;
@@ -65,7 +66,7 @@ export default function EditFoodScreen() {
       const stored = await AsyncStorage.getItem(targetKey);
       const meals = stored
         ? JSON.parse(stored)
-        : { desayuno: [], comida: [], merienda: [], cena: [] };
+        : { desayuno: [], snack1: [], comida: [], merienda: [], cena: [], snack2: [] };
 
       meals[meal] = meals[meal].map((f: any) =>
         f.id === foodId
@@ -84,11 +85,12 @@ export default function EditFoodScreen() {
       );
 
       await AsyncStorage.setItem(targetKey, JSON.stringify(meals));
+      syncDayToCloud(targetKey, meals);
       signalMealSaved(meals, targetKey);
       setGuardado(true);
       setTimeout(() => router.back(), 600);
     } catch {
-      Alert.alert("Error", "No se pudo guardar.");
+      Alert.alert(t.error, t.couldNotSave);
     }
   };
 
@@ -105,20 +107,20 @@ export default function EditFoodScreen() {
       <ScrollView style={[s.scroll, { backgroundColor: bg }]}>
         <View style={s.header}>
           <TouchableOpacity onPress={() => router.back()}>
-            <Text style={[s.back, { color: "#58A6FF" }]}>← Volver</Text>
+            <Text style={[s.back, { color: "#58A6FF" }]}>{t.back}</Text>
           </TouchableOpacity>
-          <Text style={[s.title, { color: text }]}>Editar alimento</Text>
+          <Text style={[s.title, { color: text }]}>{t.editFoodTitle}</Text>
           <Text style={[s.subtitle, { color: muted }]}>{food.name}</Text>
         </View>
 
         <View style={[s.card, { backgroundColor: card, borderColor: border }]}>
           <View style={s.gramosRow}>
-            <Text style={[s.gramosLabel, { color: sub }]}>Cantidad (g)</Text>
+            <Text style={[s.gramosLabel, { color: sub }]}>{t.quantity}</Text>
             <TextInput
               style={[s.gramosInput, { backgroundColor: bg, borderColor: border, color: text }]}
               value={gramos}
               onChangeText={setGramos}
-              keyboardType="numeric"
+              keyboardType="decimal-pad"
               selectTextOnFocus
             />
           </View>
@@ -130,34 +132,34 @@ export default function EditFoodScreen() {
             </View>
             <View style={[s.macroBox, { borderColor: "#60A5FA33" }]}>
               <Text style={[s.macroVal, { color: "#60A5FA" }]}>{newProtein}g</Text>
-              <Text style={[s.macroLabel, { color: muted }]}>Proteínas</Text>
+              <Text style={[s.macroLabel, { color: muted }]}>{t.proteins}</Text>
             </View>
             <View style={[s.macroBox, { borderColor: "#FBBF2433" }]}>
               <Text style={[s.macroVal, { color: "#FBBF24" }]}>{newCarbs}g</Text>
-              <Text style={[s.macroLabel, { color: muted }]}>Carbos</Text>
+              <Text style={[s.macroLabel, { color: muted }]}>{t.carbs}</Text>
             </View>
             <View style={[s.macroBox, { borderColor: "#F8717133" }]}>
               <Text style={[s.macroVal, { color: "#F87171" }]}>{newFat}g</Text>
-              <Text style={[s.macroLabel, { color: muted }]}>Grasas</Text>
+              <Text style={[s.macroLabel, { color: muted }]}>{t.fats}</Text>
             </View>
           </View>
 
           <View style={s.macrosGrid}>
             <View style={[s.macroBox, { borderColor: "#F8717122" }]}>
               <Text style={[s.macroVal, s.macroValSm, { color: "#FCA5A5" }]}>{newSatFat}g</Text>
-              <Text style={[s.macroLabel, { color: muted }]}>G. Saturadas</Text>
+              <Text style={[s.macroLabel, { color: muted }]}>{t.saturatedFat}</Text>
             </View>
             <View style={[s.macroBox, { borderColor: "#FBBF2422" }]}>
               <Text style={[s.macroVal, s.macroValSm, { color: "#FDE68A" }]}>{newSugar}g</Text>
-              <Text style={[s.macroLabel, { color: muted }]}>Azúcares</Text>
+              <Text style={[s.macroLabel, { color: muted }]}>{t.sugars}</Text>
             </View>
             <View style={[s.macroBox, { borderColor: "#34D39933" }]}>
               <Text style={[s.macroVal, s.macroValSm, { color: "#6EE7B7" }]}>{newFiber}g</Text>
-              <Text style={[s.macroLabel, { color: muted }]}>Fibra</Text>
+              <Text style={[s.macroLabel, { color: muted }]}>{t.fiber}</Text>
             </View>
             <View style={[s.macroBox, { borderColor: "#94A3B833" }]}>
               <Text style={[s.macroVal, s.macroValSm, { color: "#CBD5E1" }]}>{newSalt}g</Text>
-              <Text style={[s.macroLabel, { color: muted }]}>Sal</Text>
+              <Text style={[s.macroLabel, { color: muted }]}>{t.saltLabel}</Text>
             </View>
           </View>
 
@@ -167,7 +169,7 @@ export default function EditFoodScreen() {
             disabled={guardado}
           >
             <Text style={s.saveBtnText}>
-              {guardado ? "✓ Guardado" : "Guardar cambios"}
+              {guardado ? t.saved : t.saveChanges}
             </Text>
           </TouchableOpacity>
         </View>

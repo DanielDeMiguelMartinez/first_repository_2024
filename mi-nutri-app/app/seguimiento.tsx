@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   SafeAreaView,
@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { useApp } from "./services/i18n";
 import { supabase } from "./services/supabase";
+import { displayWeightToKg, kgToDisplay, loadWeightUnit, WeightUnit } from "./services/units";
 
 const GOALS_KEY = "nutri_daily_goals";
 const SEGUIMIENTO_KEY = "nutri_seguimiento_v1";
@@ -37,11 +38,6 @@ type RegistroSemanal = {
 type Sensacion = "hambre" | "bien" | "lleno";
 type Objetivo = "perder" | "mantener" | "ganar";
 
-const SENSACION_LABELS: Record<Sensacion, string> = {
-  hambre: "He pasado hambre",
-  bien: "Me he sentido bien",
-  lleno: "He estado muy lleno",
-};
 const SENSACION_ICONS: Record<Sensacion, string> = { hambre: "😤", bien: "😊", lleno: "🤢" };
 const SENSACION_COLORS: Record<Sensacion, string> = { hambre: "#F87171", bien: "#4ADE80", lleno: "#FBBF24" };
 
@@ -79,12 +75,12 @@ function calcularMacros(calorias: number, peso: number, objetivo: Objetivo) {
 function calcularAjusteSemanal(params: {
   objetivo: Objetivo; sensacion: Sensacion; pesoActual: number;
   pesoAnterior: number | null; caloriasActuales: number; tdee: number; peso: number;
-}): { nuevasCalorias: number; ajuste: number; razon: string } {
-  const { objetivo, sensacion, pesoActual, pesoAnterior, caloriasActuales, tdee, peso } = params;
+}, t: any): { nuevasCalorias: number; ajuste: number; razon: string } {
+  const { objetivo, sensacion, pesoActual, pesoAnterior, caloriasActuales, tdee } = params;
 
   if (pesoAnterior === null) {
     const meta = calcularMetaCaloriasIdeal(tdee, objetivo);
-    return { nuevasCalorias: meta, ajuste: meta - caloriasActuales, razon: "Primera semana registrada. Establecemos tu objetivo calórico basado en tu metabolismo." };
+    return { nuevasCalorias: meta, ajuste: meta - caloriasActuales, razon: t.firstWeekSetupReason };
   }
 
   const variacionPeso = pesoActual - pesoAnterior;
@@ -97,37 +93,39 @@ function calcularAjusteSemanal(params: {
   const enRangoIdeal = variacionPeso >= min && variacionPeso <= max;
   let ajuste = 0;
   let razon = "";
+  const n = (v: number) => Math.abs(v).toFixed(1);
+  const sign = (v: number) => (v >= 0 ? "+" : "");
 
   if (objetivo === "perder") {
     if (variacionPeso > 0.2) {
       ajuste = sensacion === "lleno" ? -200 : -150;
-      razon = `Ganaste ${variacionPeso.toFixed(1)}kg esta semana. Bajamos las calorías para retomar el déficit.`;
+      razon = t.gainedWeightReduceCal.replace("{n}", n(variacionPeso));
     } else if (variacionPeso > -0.1) {
       ajuste = sensacion === "lleno" ? -150 : sensacion === "hambre" ? -50 : -100;
-      razon = `Peso estancado (${variacionPeso >= 0 ? "+" : ""}${variacionPeso.toFixed(1)}kg). Bajamos ligeramente para activar el déficit.`;
+      razon = t.weightStalled.replace("{n}", `${sign(variacionPeso)}${n(variacionPeso)}`);
     } else if (enRangoIdeal) {
-      if (sensacion === "hambre") { ajuste = 75; razon = `Pérdida ideal de ${Math.abs(variacionPeso).toFixed(1)}kg pero con hambre. Subimos un poco para que sea sostenible.`; }
-      else { ajuste = 0; razon = `Pérdida ideal de ${Math.abs(variacionPeso).toFixed(1)}kg/semana. Mantenemos el plan actual.`; }
+      if (sensacion === "hambre") { ajuste = 75; razon = t.idealLossHungry.replace("{n}", n(variacionPeso)); }
+      else { ajuste = 0; razon = t.idealLossOk.replace("{n}", n(variacionPeso)); }
     } else if (variacionPeso < -1.0) {
       ajuste = sensacion === "hambre" ? 200 : 150;
-      razon = `Perdiste ${Math.abs(variacionPeso).toFixed(1)}kg, demasiado rápido. Subimos calorías para proteger el músculo.`;
+      razon = t.tooFastLoss.replace("{n}", n(variacionPeso));
     }
   } else if (objetivo === "ganar") {
     if (variacionPeso < 0) {
       ajuste = sensacion === "lleno" ? 100 : 200;
-      razon = `Perdiste ${Math.abs(variacionPeso).toFixed(1)}kg cuando el objetivo es ganar. Aumentamos las calorías.`;
+      razon = t.lostWeightGainGoal.replace("{n}", n(variacionPeso));
     } else if (variacionPeso < 0.2) {
       ajuste = sensacion === "lleno" ? 75 : 150;
-      razon = `Ganaste solo ${variacionPeso.toFixed(1)}kg. Subimos un poco para acelerar el progreso.`;
+      razon = t.gainedTooLittle.replace("{n}", n(variacionPeso));
     } else if (enRangoIdeal) {
-      ajuste = 0; razon = `Ganancia ideal de ${variacionPeso.toFixed(1)}kg/semana. Mantenemos el plan.`;
+      ajuste = 0; razon = t.idealGainOk.replace("{n}", n(variacionPeso));
     } else if (variacionPeso > 0.6) {
-      ajuste = -100; razon = `Ganaste ${variacionPeso.toFixed(1)}kg, un poco rápido. Bajamos ligeramente para minimizar grasa.`;
+      ajuste = -100; razon = t.gainedTooFast.replace("{n}", n(variacionPeso));
     }
   } else {
-    if (Math.abs(variacionPeso) <= 0.2) { ajuste = 0; razon = `Peso estable (${variacionPeso >= 0 ? "+" : ""}${variacionPeso.toFixed(1)}kg). Perfecto mantenimiento.`; }
-    else if (variacionPeso > 0.3) { ajuste = sensacion === "lleno" ? -150 : -100; razon = `Ganaste ${variacionPeso.toFixed(1)}kg. Bajamos un poco para volver al peso objetivo.`; }
-    else if (variacionPeso < -0.3) { ajuste = sensacion === "hambre" ? 150 : 100; razon = `Perdiste ${Math.abs(variacionPeso).toFixed(1)}kg. Subimos un poco para mantener el peso.`; }
+    if (Math.abs(variacionPeso) <= 0.2) { ajuste = 0; razon = t.weightStableOk.replace("{n}", `${sign(variacionPeso)}${n(variacionPeso)}`); }
+    else if (variacionPeso > 0.3) { ajuste = sensacion === "lleno" ? -150 : -100; razon = t.gainedMaintain.replace("{n}", n(variacionPeso)); }
+    else if (variacionPeso < -0.3) { ajuste = sensacion === "hambre" ? 150 : 100; razon = t.lostMaintain.replace("{n}", n(variacionPeso)); }
   }
 
   const margenMax = objetivo === "perder" ? tdee - 200 : tdee + 600;
@@ -153,9 +151,165 @@ async function obtenerPromedioSemanal(): Promise<number> {
   } catch { return 0; }
 }
 
+type DiaMacros = {
+  fecha: Date;
+  kcal: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  hasData: boolean;
+};
+
+async function obtenerHistorial7Dias(): Promise<DiaMacros[]> {
+  const dias: DiaMacros[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    const key = `nutri_meals_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    try {
+      const stored = await AsyncStorage.getItem(key);
+      if (stored) {
+        const meals: Record<string, any[]> = JSON.parse(stored);
+        const items: any[] = Object.values(meals).flat();
+        const kcal    = Math.round(items.reduce((a, f) => a + (f.calories || 0), 0));
+        const protein = Math.round(items.reduce((a, f) => a + (f.protein  || 0), 0));
+        const carbs   = Math.round(items.reduce((a, f) => a + (f.carbs    || 0), 0));
+        const fat     = Math.round(items.reduce((a, f) => a + (f.fat      || 0), 0));
+        dias.push({ fecha: d, kcal, protein, carbs, fat, hasData: kcal > 0 });
+      } else {
+        dias.push({ fecha: d, kcal: 0, protein: 0, carbs: 0, fat: 0, hasData: false });
+      }
+    } catch {
+      dias.push({ fecha: d, kcal: 0, protein: 0, carbs: 0, fat: 0, hasData: false });
+    }
+  }
+  return dias;
+}
+
+// ── Gráfico semanal ─────────────────────────────────────────────────────────
+type MacroKey = "kcal" | "protein" | "carbs" | "fat";
+const GRAFICO_MACRO_COLORS: Record<MacroKey, string> = {
+  kcal: "#4ADE80", protein: "#60A5FA", carbs: "#FBBF24", fat: "#F87171",
+};
+const GRAFICO_MACRO_UNITS: Record<MacroKey, string> = {
+  kcal: "kcal", protein: "g", carbs: "g", fat: "g",
+};
+
+function GraficoSemanal({ datos, goals, colors }: {
+  datos: DiaMacros[];
+  goals: { calories: number; protein: number; carbs: number; fat: number } | null;
+  colors: any;
+}) {
+  const { t, language } = useApp();
+  const [macro, setMacro] = useState<MacroKey>("kcal");
+  const locale = language === "zh" ? "zh-CN" : language === "ja" ? "ja-JP" : language === "ko" ? "ko-KR" : language === "ar" ? "ar-SA" : language;
+  const getMacroLabel = (m: MacroKey) => m === "kcal" ? t.calories : m === "protein" ? t.proteins : m === "carbs" ? t.carbs : t.fats;
+
+  const getVal = (d: DiaMacros): number =>
+    macro === "kcal" ? d.kcal : macro === "protein" ? d.protein : macro === "carbs" ? d.carbs : d.fat;
+
+  const goalVal = !goals ? 0
+    : macro === "kcal" ? goals.calories
+    : macro === "protein" ? goals.protein
+    : macro === "carbs" ? goals.carbs
+    : goals.fat;
+
+  const maxVal = Math.max(...datos.map(getVal), goalVal, 1);
+  const CHART_H = 110;
+
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+
+  const diasConDatos = datos.filter(d => d.hasData);
+  const promedio = diasConDatos.length > 0
+    ? Math.round(diasConDatos.reduce((a, d) => a + getVal(d), 0) / diasConDatos.length)
+    : 0;
+  const diffPct = goalVal > 0 && promedio > 0
+    ? Math.round(((promedio - goalVal) / goalVal) * 100)
+    : null;
+
+  return (
+    <View style={{ backgroundColor: colors.card, borderRadius: 20, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: colors.cardBorder, gap: 12 }}>
+      <Text style={{ color: colors.text, fontSize: 15, fontWeight: "700" }}>{t.last7DaysHistory}</Text>
+
+      {/* Selector macro */}
+      <View style={{ flexDirection: "row", gap: 6 }}>
+        {(["kcal", "protein", "carbs", "fat"] as MacroKey[]).map(m => (
+          <TouchableOpacity
+            key={m}
+            style={{ flex: 1, paddingVertical: 7, borderRadius: 10, alignItems: "center", backgroundColor: macro === m ? GRAFICO_MACRO_COLORS[m] + "22" : colors.bg, borderWidth: 1, borderColor: macro === m ? GRAFICO_MACRO_COLORS[m] : colors.cardBorder }}
+            onPress={() => setMacro(m)}
+          >
+            <Text style={{ color: macro === m ? GRAFICO_MACRO_COLORS[m] : colors.textMuted, fontSize: 10, fontWeight: "700" }}>
+              {getMacroLabel(m)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Barras */}
+      <View style={{ position: "relative" }}>
+        {/* Línea de objetivo (dashed simulada con View) */}
+        {goalVal > 0 && (
+          <View style={{ position: "absolute", left: 0, right: 0, bottom: 22 + Math.round((goalVal / maxVal) * CHART_H), height: 1, backgroundColor: GRAFICO_MACRO_COLORS[macro] + "55" }}>
+            <Text style={{ position: "absolute", right: 2, top: -10, color: GRAFICO_MACRO_COLORS[macro], fontSize: 8, fontWeight: "700" }}>{t.goal}</Text>
+          </View>
+        )}
+        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 4, height: CHART_H + 22 }}>
+          {datos.map((dia, i) => {
+            const val = getVal(dia);
+            const barH = dia.hasData ? Math.max(4, Math.round((val / maxVal) * CHART_H)) : 4;
+            const isToday = dia.fecha.getTime() === hoy.getTime();
+            const overGoal = goalVal > 0 && val > goalVal * 1.08;
+            const barColor = !dia.hasData ? colors.cardBorder : overGoal ? "#F87171" : GRAFICO_MACRO_COLORS[macro];
+            const dowJS = dia.fecha.getDay();
+            const dowIdx = dowJS === 0 ? 6 : dowJS - 1;
+            return (
+              <View key={i} style={{ flex: 1, alignItems: "center", justifyContent: "flex-end", height: CHART_H + 22 }}>
+                {dia.hasData && (
+                  <Text style={{ color: barColor, fontSize: 8, fontWeight: "700", marginBottom: 2 }}>
+                    {val >= 1000 ? `${(val / 1000).toFixed(1)}k` : String(val)}
+                  </Text>
+                )}
+                <View style={{ width: "82%", height: barH, borderRadius: 5, backgroundColor: barColor, opacity: isToday ? 1 : 0.65 }} />
+                <Text style={{ color: isToday ? GRAFICO_MACRO_COLORS[macro] : colors.textMuted, fontSize: 10, marginTop: 4, fontWeight: isToday ? "800" : "500" }}>
+                  {dia.fecha.toLocaleDateString(locale, { weekday: "short" }).slice(0, 2).toUpperCase()}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      </View>
+
+      {/* Resumen */}
+      {diasConDatos.length === 0 ? (
+        <Text style={{ color: colors.textMuted, fontSize: 12, textAlign: "center" }}>
+          {t.noHistoryData}
+        </Text>
+      ) : (
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: colors.bg, borderRadius: 10, padding: 10 }}>
+          <Text style={{ color: colors.textSub, fontSize: 12 }}>
+            {t.avgNDays.replace("{n}", String(diasConDatos.length))}{" "}
+            <Text style={{ color: GRAFICO_MACRO_COLORS[macro], fontWeight: "700" }}>
+              {promedio} {GRAFICO_MACRO_UNITS[macro]}
+            </Text>
+          </Text>
+          {diffPct !== null && (
+            <Text style={{ color: Math.abs(diffPct) <= 8 ? "#4ADE80" : diffPct > 8 ? "#F87171" : "#FBBF24", fontSize: 11, fontWeight: "700" }}>
+              {diffPct > 0 ? "+" : ""}{t.vsMeta.replace("{pct}", String(diffPct))}
+            </Text>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
 export default function SeguimientoScreen() {
   const router = useRouter();
-  const { colors, theme } = useApp();
+  const { colors, theme, t, language } = useApp();
+  const locale = language === "zh" ? "zh-CN" : language === "ja" ? "ja-JP" : language === "ko" ? "ko-KR" : language === "ar" ? "ar-SA" : language;
   const [peso, setPeso] = useState("");
   const [sensacion, setSensacion] = useState<Sensacion>("bien");
   const [guardando, setGuardando] = useState(false);
@@ -163,17 +317,24 @@ export default function SeguimientoScreen() {
   const [goals, setGoals] = useState<{ calories: number; protein: number; carbs: number; fat: number } | null>(null);
   const [perfil, setPerfil] = useState<{ peso: number; altura: number; edad: number; sexo: "hombre" | "mujer"; actividad: string; objetivo: Objetivo } | null>(null);
   const [promedioSemanal, setPromedioSemanal] = useState(0);
+  const [historialDiario, setHistorialDiario] = useState<DiaMacros[]>([]);
   const [ultimoRegistro, setUltimoRegistro] = useState<RegistroSemanal | null>(null);
   const [yaRegistradoEstaSemana, setYaRegistradoEstaSemana] = useState(false);
   const [tdee, setTdee] = useState(0);
   const [userId, setUserId] = useState<string | null>(null);
+  const [weightUnit, setWeightUnit] = useState<WeightUnit>("kg");
 
   useFocusEffect(useCallback(() => { cargarDatos(); }, []));
+  useEffect(() => { loadWeightUnit().then(setWeightUnit); }, []);
 
   const cargarDatos = async () => {
     try {
-      const promedio = await obtenerPromedioSemanal();
+      const [promedio, historial7d] = await Promise.all([
+        obtenerPromedioSemanal(),
+        obtenerHistorial7Dias(),
+      ]);
       setPromedioSemanal(promedio);
+      setHistorialDiario(historial7d);
 
       // Usar reintento para esperar a que la sesión esté lista en web
       const session = await getSessionWithRetry();
@@ -283,18 +444,21 @@ export default function SeguimientoScreen() {
   };
 
   const guardarRegistro = async () => {
-    if (!peso || Number(peso) < 30 || Number(peso) > 300) {
-      Alert.alert("Peso inválido", "Introduce un peso entre 30 y 300 kg.");
+    const pesoDisplay = Number(peso.replace(",", "."));
+    const minW = weightUnit === "lbs" ? 66 : 30;
+    const maxW = weightUnit === "lbs" ? 661 : 300;
+    if (!peso || pesoDisplay < minW || pesoDisplay > maxW) {
+      Alert.alert(t.invalidWeight, t.invalidWeightMsg);
       return;
     }
     if (!goals || !perfil) {
-      Alert.alert("Error", "No se pudo cargar tu perfil.");
+      Alert.alert(t.error, t.couldNotLoadProfile);
       return;
     }
 
     setGuardando(true);
     try {
-      const pesoNum = Number(peso);
+      const pesoNum = displayWeightToKg(Number(peso.replace(",", ".")), weightUnit);
       const tdeeActual = calcularTDEE({ ...perfil, peso: pesoNum });
       const metaIdeal = calcularMetaCaloriasIdeal(tdeeActual, perfil.objetivo);
 
@@ -302,7 +466,7 @@ export default function SeguimientoScreen() {
         objetivo: perfil.objetivo, sensacion,
         pesoActual: pesoNum, pesoAnterior: ultimoRegistro ? ultimoRegistro.peso : null,
         caloriasActuales: goals.calories, tdee: tdeeActual, peso: pesoNum,
-      });
+      }, t);
 
       const nuevosMacros = calcularMacros(nuevasCalorias, pesoNum, perfil.objetivo);
       const nuevosGoals = { calories: nuevasCalorias, ...nuevosMacros };
@@ -354,28 +518,29 @@ export default function SeguimientoScreen() {
       setPeso("");
 
       const mensajeAjuste = ajuste === 0
-        ? "Sin cambios en tus calorías esta semana."
+        ? t.noCalorieChanges
         : ajuste > 0
-          ? `Se añaden +${ajuste} kcal → nuevo objetivo: ${nuevasCalorias} kcal/día`
-          : `Se reducen ${Math.abs(ajuste)} kcal → nuevo objetivo: ${nuevasCalorias} kcal/día`;
+          ? t.calAdded.replace("{n}", String(ajuste)).replace("{goal}", String(nuevasCalorias))
+          : t.calReduced.replace("{n}", String(Math.abs(ajuste))).replace("{goal}", String(nuevasCalorias));
 
-      Alert.alert("✓ Registrado", `${razon}\n\n${mensajeAjuste}`);
-    } catch { Alert.alert("Error", "No se pudo guardar el registro."); }
+      Alert.alert(t.weeklyRecord, `${razon}\n\n${mensajeAjuste}`);
+    } catch { Alert.alert(t.error, t.couldNotSaveRecord); }
     setGuardando(false);
   };
 
   const previewAjuste = (() => {
-    if (!goals || !perfil || !peso || Number(peso) < 30) return null;
-    const pesoNum = Number(peso);
+    const minW = weightUnit === "lbs" ? 66 : 30;
+    if (!goals || !perfil || !peso || Number(peso.replace(",", ".")) < minW) return null;
+    const pesoNum = displayWeightToKg(Number(peso.replace(",", ".")), weightUnit);
     const tdeeActual = calcularTDEE({ ...perfil, peso: pesoNum });
     return calcularAjusteSemanal({
       objetivo: perfil.objetivo, sensacion,
       pesoActual: pesoNum, pesoAnterior: ultimoRegistro ? ultimoRegistro.peso : null,
       caloriasActuales: goals.calories, tdee: tdeeActual, peso: pesoNum,
-    });
+    }, t);
   })();
 
-  const s = makeStyles(colors);
+  const s = useMemo(() => makeStyles(colors), [colors]);
 
   return (
     <SafeAreaView style={s.safe}>
@@ -383,47 +548,47 @@ export default function SeguimientoScreen() {
       <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
 
         <View style={s.header}>
-          <TouchableOpacity onPress={() => router.back()}><Text style={s.back}>← Volver</Text></TouchableOpacity>
-          <Text style={s.title}>Seguimiento semanal</Text>
-          <Text style={s.subtitle}>Registra tu peso cada semana para ajustar tus calorías automáticamente</Text>
+          <TouchableOpacity onPress={() => router.back()}><Text style={s.back}>{t.back}</Text></TouchableOpacity>
+          <Text style={s.title}>{t.weeklyTracking}</Text>
+          <Text style={s.subtitle}>{t.trackWeightSubtitle}</Text>
         </View>
 
         {perfil && tdee > 0 && (
           <View style={s.tdeeCard}>
-            <Text style={s.tdeeTitle}>📐 Tu metabolismo calculado</Text>
+            <Text style={s.tdeeTitle}>{t.yourMetabolismCalc}</Text>
             <View style={s.tdeeRow}>
               <View style={s.tdeeDato}>
                 <Text style={s.tdeeDatoVal}>{tdee}</Text>
-                <Text style={s.tdeeDatoLabel}>TDEE (kcal/día)</Text>
+                <Text style={s.tdeeDatoLabel}>{t.tdeeLabel}</Text>
               </View>
               <View style={s.tdeeDato}>
                 <Text style={[s.tdeeDatoVal, { color: "#4ADE80" }]}>{calcularMetaCaloriasIdeal(tdee, perfil.objetivo)}</Text>
-                <Text style={s.tdeeDatoLabel}>Meta ideal</Text>
+                <Text style={s.tdeeDatoLabel}>{t.idealGoalLabel}</Text>
               </View>
               <View style={s.tdeeDato}>
                 <Text style={[s.tdeeDatoVal, { color: "#60A5FA" }]}>{goals?.calories ?? "—"}</Text>
-                <Text style={s.tdeeDatoLabel}>Actual</Text>
+                <Text style={s.tdeeDatoLabel}>{t.currentLabel}</Text>
               </View>
             </View>
             <Text style={s.tdeeHint}>
               {perfil.objetivo === "perder"
-                ? `Déficit de ${tdee - (goals?.calories ?? tdee)} kcal/día → pérdida estimada ~${(((tdee - (goals?.calories ?? tdee)) * 7) / 7700).toFixed(2)}kg/semana`
+                ? t.tdeeDeficit.replace("{n}", String(tdee - (goals?.calories ?? tdee))).replace("{kg}", (((tdee - (goals?.calories ?? tdee)) * 7) / 7700).toFixed(2))
                 : perfil.objetivo === "ganar"
-                  ? `Superávit de ${(goals?.calories ?? tdee) - tdee} kcal/día`
-                  : "Mantenimiento calórico"}
+                  ? t.tdeeSurplus.replace("{n}", String((goals?.calories ?? tdee) - tdee))
+                  : t.tdeeMaintain}
             </Text>
           </View>
         )}
 
         {goals && (
           <View style={s.goalsCard}>
-            <Text style={s.goalsTitle}>🎯 Objetivos actuales</Text>
+            <Text style={s.goalsTitle}>{t.currentGoalsTitle}</Text>
             <View style={s.goalsRow}>
               {[
                 { val: goals.calories, label: "kcal", color: "#4ADE80" },
-                { val: goals.protein + "g", label: "Prot", color: "#60A5FA" },
-                { val: goals.carbs + "g", label: "Carbos", color: "#FBBF24" },
-                { val: goals.fat + "g", label: "Grasas", color: "#F87171" },
+                { val: goals.protein + "g", label: t.proteins, color: "#60A5FA" },
+                { val: goals.carbs + "g", label: t.carbs, color: "#FBBF24" },
+                { val: goals.fat + "g", label: t.fats, color: "#F87171" },
               ].map((item) => (
                 <View key={item.label} style={s.goalChip}>
                   <Text style={[s.goalChipVal, { color: item.color }]}>{item.val}</Text>
@@ -433,61 +598,72 @@ export default function SeguimientoScreen() {
             </View>
             {promedioSemanal > 0 && (
               <View style={s.promedioRow}>
-                <Text style={s.promedioLabel}>📊 Promedio real esta semana:</Text>
+                <Text style={s.promedioLabel}>{t.weeklyActualAvg}</Text>
                 <Text style={[s.promedioVal, { color: promedioSemanal > goals.calories ? "#F87171" : "#4ADE80" }]}>
-                  {promedioSemanal} kcal/día
+                  {promedioSemanal} {t.kcalPerDay}
                 </Text>
               </View>
             )}
           </View>
         )}
 
+        {historialDiario.length > 0 && (
+          <GraficoSemanal datos={historialDiario} goals={goals} colors={colors} />
+        )}
+
         {yaRegistradoEstaSemana ? (
           <View style={s.yaRegistradoCard}>
             <Text style={s.yaRegistradoIcon}>✅</Text>
-            <Text style={s.yaRegistradoTitle}>Ya registraste esta semana</Text>
+            <Text style={s.yaRegistradoTitle}>{t.alreadyRegisteredThisWeek}</Text>
             <Text style={s.yaRegistradoDesc}>
-              Vuelve en {ultimoRegistro ? Math.max(1, 7 - Math.floor((Date.now() - new Date(ultimoRegistro.fecha).getTime()) / (1000 * 60 * 60 * 24))) : 7} días.
+              {t.comeBackInDays.replace("{n}", String(ultimoRegistro ? Math.max(1, 7 - Math.floor((Date.now() - new Date(ultimoRegistro.fecha).getTime()) / (1000 * 60 * 60 * 24))) : 7))}
             </Text>
             {ultimoRegistro && (
               <View style={s.ultimoResumen}>
-                <Text style={s.ultimoResumenText}>Último peso: <Text style={{ color: colors.text, fontWeight: "700" }}>{ultimoRegistro.peso} kg</Text></Text>
+                <Text style={s.ultimoResumenText}>{t.lastWeightLabel} <Text style={{ color: colors.text, fontWeight: "700" }}>{kgToDisplay(ultimoRegistro.peso, weightUnit)} {weightUnit}</Text></Text>
                 <Text style={[s.ultimoResumenText, { color: ultimoRegistro.ajuste >= 0 ? "#4ADE80" : "#F87171" }]}>
-                  {ultimoRegistro.ajuste >= 0 ? "+" : ""}{ultimoRegistro.ajuste} kcal ajustadas
+                  {ultimoRegistro.ajuste >= 0 ? "+" : ""}{t.kcalAdjusted.replace("{n}", String(ultimoRegistro.ajuste))}
                 </Text>
               </View>
             )}
           </View>
         ) : (
           <View style={s.formCard}>
-            <Text style={s.formTitle}>📝 Registro de esta semana</Text>
+            <Text style={s.formTitle}>{t.thisWeekRecord}</Text>
 
             <View style={s.fieldRow}>
               <View style={s.fieldLeft}>
-                <Text style={s.fieldLabel}>⚖️ Tu peso actual</Text>
-                <Text style={s.fieldHint}>{ultimoRegistro ? `Semana pasada: ${ultimoRegistro.peso} kg` : "Primera vez que registras"}</Text>
+                <Text style={s.fieldLabel}>{t.yourCurrentWeight}</Text>
+                <Text style={s.fieldHint}>{ultimoRegistro ? t.lastWeekKgLabel.replace("{n}", String(kgToDisplay(ultimoRegistro.peso, weightUnit))) : t.firstTimeRegistering}</Text>
               </View>
               <View style={s.fieldRight}>
-                <TextInput style={s.pesoInput} value={peso} onChangeText={setPeso} placeholder="70" placeholderTextColor={colors.textMuted} keyboardType="numeric" selectTextOnFocus />
-                <Text style={s.pesoUnit}>kg</Text>
+                <TextInput style={s.pesoInput} value={peso} onChangeText={setPeso} placeholder={weightUnit === "lbs" ? "154" : "70"} placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" selectTextOnFocus />
+                <Text style={s.pesoUnit}>{weightUnit}</Text>
               </View>
             </View>
 
-            {ultimoRegistro && peso && Number(peso) >= 30 && (
-              <View style={[s.variacionRow, { borderColor: Number(peso) > ultimoRegistro.peso + 0.1 ? "#F87171" : Number(peso) < ultimoRegistro.peso - 0.1 ? "#4ADE80" : "#FBBF24" }]}>
-                <Text style={{ fontSize: 14, fontWeight: "700", color: Number(peso) > ultimoRegistro.peso + 0.1 ? "#F87171" : Number(peso) < ultimoRegistro.peso - 0.1 ? "#4ADE80" : "#FBBF24" }}>
-                  {Number(peso) > ultimoRegistro.peso ? "+" : ""}{(Number(peso) - ultimoRegistro.peso).toFixed(1)} kg esta semana
-                  {Number(peso) > ultimoRegistro.peso + 0.1 ? " · Subiendo ↑" : Number(peso) < ultimoRegistro.peso - 0.1 ? " · Bajando ↓" : " · Estable →"}
-                </Text>
-              </View>
-            )}
+            {ultimoRegistro && peso && Number(peso) >= (weightUnit === "lbs" ? 66 : 30) && (() => {
+              const prevDisplay = kgToDisplay(ultimoRegistro.peso, weightUnit);
+              const curDisplay = Number(peso);
+              const diff = curDisplay - prevDisplay;
+              const threshold = weightUnit === "lbs" ? 0.2 : 0.1;
+              const color = diff > threshold ? "#F87171" : diff < -threshold ? "#4ADE80" : "#FBBF24";
+              return (
+                <View style={[s.variacionRow, { borderColor: color }]}>
+                  <Text style={{ fontSize: 14, fontWeight: "700", color }}>
+                    {diff > 0 ? "+" : ""}{diff.toFixed(1)} {weightUnit} {t.kgThisWeek}
+                    {diff > threshold ? t.weightRising : diff < -threshold ? t.weightFalling : t.weightStable}
+                  </Text>
+                </View>
+              );
+            })()}
 
-            <Text style={s.sensacionTitle}>😮 ¿Cómo te has sentido comiendo esta semana?</Text>
+            <Text style={s.sensacionTitle}>{t.howDidYouFeel}</Text>
             <View style={s.sensacionCol}>
               {(["hambre", "bien", "lleno"] as Sensacion[]).map((sv) => (
                 <TouchableOpacity key={sv} style={[s.sensacionBtn, sensacion === sv && { backgroundColor: SENSACION_COLORS[sv] + "22", borderColor: SENSACION_COLORS[sv] }]} onPress={() => setSensacion(sv)} activeOpacity={0.7}>
                   <Text style={s.sensacionIcon}>{SENSACION_ICONS[sv]}</Text>
-                  <Text style={[s.sensacionLabel, sensacion === sv && { color: SENSACION_COLORS[sv], fontWeight: "700" }]}>{SENSACION_LABELS[sv]}</Text>
+                  <Text style={[s.sensacionLabel, sensacion === sv && { color: SENSACION_COLORS[sv], fontWeight: "700" }]}>{sv === "hambre" ? t.feelingHungry : sv === "bien" ? t.feelingGood : t.feelingFull}</Text>
                   {sensacion === sv && <Text style={[s.sensacionCheck, { color: SENSACION_COLORS[sv] }]}>✓</Text>}
                 </TouchableOpacity>
               ))}
@@ -495,25 +671,25 @@ export default function SeguimientoScreen() {
 
             {previewAjuste && (
               <View style={s.previewCard}>
-                <Text style={s.previewTitulo}>💡 Ajuste estimado si guardas ahora</Text>
+                <Text style={s.previewTitulo}>{t.estimatedAdjustment}</Text>
                 <Text style={s.previewRazon}>{previewAjuste.razon}</Text>
                 <View style={s.previewNums}>
                   <View style={s.previewNum}>
                     <Text style={[s.previewNumVal, { color: previewAjuste.ajuste === 0 ? "#58A6FF" : previewAjuste.ajuste > 0 ? "#4ADE80" : "#F87171" }]}>
                       {previewAjuste.ajuste === 0 ? "=" : previewAjuste.ajuste > 0 ? `+${previewAjuste.ajuste}` : previewAjuste.ajuste} kcal
                     </Text>
-                    <Text style={s.previewNumLabel}>Cambio</Text>
+                    <Text style={s.previewNumLabel}>{t.changeLabel}</Text>
                   </View>
                   <View style={s.previewNum}>
                     <Text style={[s.previewNumVal, { color: "#4ADE80" }]}>{previewAjuste.nuevasCalorias}</Text>
-                    <Text style={s.previewNumLabel}>Nueva meta</Text>
+                    <Text style={s.previewNumLabel}>{t.newGoal}</Text>
                   </View>
                   {goals && perfil && (
                     <View style={s.previewNum}>
                       <Text style={[s.previewNumVal, { color: "#FBBF24" }]}>
-                        ~{(Math.abs(calcularTDEE({ ...perfil, peso: Number(peso) }) - previewAjuste.nuevasCalorias) * 7 / 7700).toFixed(2)}kg
+                        ~{(Math.abs(calcularTDEE({ ...perfil, peso: displayWeightToKg(Number(peso), weightUnit) }) - previewAjuste.nuevasCalorias) * 7 / 7700).toFixed(2)}kg
                       </Text>
-                      <Text style={s.previewNumLabel}>Est. semana</Text>
+                      <Text style={s.previewNumLabel}>{t.weekEstimate}</Text>
                     </View>
                   )}
                 </View>
@@ -521,16 +697,16 @@ export default function SeguimientoScreen() {
             )}
 
             <TouchableOpacity style={[s.guardarBtn, guardando && s.guardarBtnDisabled]} onPress={guardarRegistro} disabled={guardando}>
-              <Text style={s.guardarBtnText}>{guardando ? "Guardando..." : "Guardar y actualizar objetivos"}</Text>
+              <Text style={s.guardarBtnText}>{guardando ? t.savingDots : t.saveAndUpdateGoals}</Text>
             </TouchableOpacity>
           </View>
         )}
 
         {historial.length > 0 && (
           <View style={s.historialSection}>
-            <Text style={s.historialTitle}>📈 Historial de seguimiento</Text>
+            <Text style={s.historialTitle}>{t.weeklyHistory}</Text>
             {historial.map((reg, i) => {
-              const fechaStr = new Date(reg.fecha).toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" });
+              const fechaStr = new Date(reg.fecha).toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" });
               const varPeso = i < historial.length - 1 ? reg.peso - historial[i + 1].peso : null;
               return (
                 <View key={i} style={s.historialCard}>
@@ -549,10 +725,10 @@ export default function SeguimientoScreen() {
                   </View>
                   <View style={s.historialRow}>
                     {[
-                      { val: `${reg.peso}kg`, label: "Peso" },
-                      { val: reg.caloriasPromedio > 0 ? String(reg.caloriasPromedio) : "—", label: "Prom kcal" },
-                      { val: reg.ajuste === 0 ? "=" : reg.ajuste > 0 ? `+${reg.ajuste}` : String(reg.ajuste), label: "Ajuste", color: reg.ajuste === 0 ? colors.textSub : reg.ajuste > 0 ? "#4ADE80" : "#F87171" },
-                      { val: String(reg.caloriasNuevas), label: "Nueva meta", color: "#4ADE80" },
+                      { val: `${reg.peso}kg`, label: t.weightLabel },
+                      { val: reg.caloriasPromedio > 0 ? String(reg.caloriasPromedio) : "—", label: t.avgKcal },
+                      { val: reg.ajuste === 0 ? "=" : reg.ajuste > 0 ? `+${reg.ajuste}` : String(reg.ajuste), label: t.adjustmentLabel, color: reg.ajuste === 0 ? colors.textSub : reg.ajuste > 0 ? "#4ADE80" : "#F87171" },
+                      { val: String(reg.caloriasNuevas), label: t.newGoal, color: "#4ADE80" },
                     ].map((d) => (
                       <View key={d.label} style={s.historialDato}>
                         <Text style={[s.historialDatoVal, d.color ? { color: d.color } : {}]}>{d.val}</Text>
@@ -571,7 +747,6 @@ export default function SeguimientoScreen() {
     </SafeAreaView>
   );
 }
-
 function makeStyles(colors: any) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: colors.bg },

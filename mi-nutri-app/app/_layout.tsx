@@ -273,35 +273,38 @@ export default function RootLayout() {
     // true cuando INITIAL_SESSION ya fue procesado
     let initialHandled = false;
 
-    const redirigirInicial = async (session: any) => {
-      if (!session) {
-        router.replace("/auth");
-        return;
-      }
+    // INITIAL_SESSION: solo garantiza auth/onboarding — no redirige a "/" si ya
+    // el usuario está en una ruta válida (ej: /reels). Así evitamos cerrar la
+    // pantalla cuando se abre la app directamente en una ruta secundaria.
+    const validarSesionInicial = async (session: any) => {
+      if (!session) { router.replace("/auth"); return; }
       try {
         const { data: perfil } = await supabase
-          .from("perfiles")
-          .select("id")
-          .eq("id", session.user.id)
-          .single();
-        if (!perfil) {
-          router.replace("/onboarding");
-        } else {
-          router.replace("/");
-        }
-      } catch {
-        router.replace("/");
-      }
+          .from("perfiles").select("id").eq("id", session.user.id).single();
+        if (!perfil) router.replace("/onboarding");
+        // Con perfil: el usuario se queda donde está, no redirigimos.
+      } catch {}
+    };
+
+    // SIGNED_IN (tras login manual): sí redirigimos al home.
+    const redirigirTraasLogin = async (session: any) => {
+      if (!session) { router.replace("/auth"); return; }
+      try {
+        const { data: perfil } = await supabase
+          .from("perfiles").select("id").eq("id", session.user.id).single();
+        if (!perfil) router.replace("/onboarding");
+        else router.replace("/");
+      } catch { router.replace("/"); }
     };
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (event === "INITIAL_SESSION") {
           initialHandled = true;
-          await redirigirInicial(session);
+          await validarSesionInicial(session);
         } else if (event === "SIGNED_IN" && !initialHandled) {
           initialHandled = true;
-          await redirigirInicial(session);
+          await redirigirTraasLogin(session);
         } else if (event === "SIGNED_OUT") {
           // Solo redirigimos a /auth si INITIAL_SESSION ya fue procesado
           // (evita redirigir cuando SIGNED_OUT se dispara durante la
