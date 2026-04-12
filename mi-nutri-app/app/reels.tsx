@@ -12,7 +12,7 @@ import { Video, ResizeMode } from "expo-av";
 import { Audio } from "expo-av";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Animated, Dimensions, Image, Modal, PanResponder, Pressable,
+  ActivityIndicator, Alert, Animated, AppState, Dimensions, Image, Modal, PanResponder, Pressable,
   Platform, ScrollView, StatusBar, StyleSheet, Text, TextInput,
   TouchableOpacity, View, useWindowDimensions,
 } from "react-native";
@@ -529,25 +529,20 @@ function MusicPickerModal({ visible, onClose, onSelect, videoDuration = 0 }: {
 }
 
 // ─── Slideshow de fotos ────────────────────────────────────────────────────────
-function PhotoSlideshow({ fotos, active }: { fotos: string[]; active: boolean }) {
+function PhotoSlideshow({ fotos, active, onLastSwipe }: { fotos: string[]; active: boolean; onLastSwipe?: () => void }) {
   const [current, setCurrent] = useState(0);
   const scrollRef = useRef<any>(null);
   const { width: SW } = useWindowDimensions();
-
-  useEffect(() => {
-    if (!active || fotos.length <= 1) return;
-    const t = setInterval(() => {
-      setCurrent(c => {
-        const next = (c + 1) % fotos.length;
-        scrollRef.current?.scrollTo?.({ x: next * SW, animated: true });
-        return next;
-      });
-    }, 3500);
-    return () => clearInterval(t);
-  }, [active, fotos.length, SW]);
+  const touchStartX = useRef(0);
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#000" }}>
+    <View style={{ flex: 1, backgroundColor: "#000" }}
+      onTouchStart={(e: any) => { touchStartX.current = e.nativeEvent.pageX ?? 0; }}
+      onTouchEnd={(e: any) => {
+        const endX = e.nativeEvent.pageX ?? 0;
+        const diff = endX - touchStartX.current;
+        if (diff < -80 && current >= fotos.length - 1 && onLastSwipe) onLastSwipe();
+      }}>
       <ScrollView ref={scrollRef} horizontal pagingEnabled showsHorizontalScrollIndicator={false}
         scrollEventThrottle={16}
         onScroll={e => setCurrent(Math.round(e.nativeEvent.contentOffset.x / SW))}>
@@ -710,6 +705,37 @@ function VideoPlayer({ url, active, filtro, camaraFrontal, cancionUrl, cancionSt
     if (musicRef.current) musicRef.current.muted = webMuted;
   }, [webMuted]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Web: visibilitychange — pausa vídeo+música cuando la pestaña se oculta ──
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const handler = () => {
+      if (document.hidden) {
+        ref.current?.pause?.();
+        if (musicRef.current) musicRef.current.pause();
+      } else if (active) {
+        ref.current?.play?.().catch(() => {});
+        if (musicRef.current) musicRef.current.play?.().catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
+  }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Native: AppState — pausa cuando la app va a background ────────────────
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") {
+        nativeVideoRef.current?.pauseAsync?.().catch(() => {});
+        nativeMusicRef.current?.pauseAsync?.().catch(() => {});
+      } else if (active) {
+        nativeVideoRef.current?.playAsync?.().catch(() => {});
+        nativeMusicRef.current?.playAsync?.().catch(() => {});
+      }
+    });
+    return () => sub.remove();
+  }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Pause/resume ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (Platform.OS !== "web" || !active) return;
@@ -821,11 +847,11 @@ const vid = StyleSheet.create({
 });
 
 // ─── Tarjeta de reel — estilo TikTok ──────────────────────────────────────────
-function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDelete, onDismiss, onComentarios, onGuardar, isGuardado, onAnadirAlDia, onOpenProfile }: {
+function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDelete, onComentarios, onGuardar, isGuardado, onAnadirAlDia, onOpenProfile }: {
   reel: Reel; active: boolean;
   liked: boolean; onLike: () => void; seguido: boolean; onFollow: () => void;
   esMio: boolean; onDelete: () => void;
-  onDismiss?: () => void; onComentarios: () => void;
+  onComentarios: () => void;
   onGuardar: () => void; isGuardado: boolean; onAnadirAlDia: () => void;
   onOpenProfile: () => void;
 }) {
@@ -884,7 +910,9 @@ function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDel
   };
 
   const handleTouchStart = (e: any) => { swipeStartX.current = e.nativeEvent.pageX ?? e.nativeEvent.locationX ?? 0; swiped.current = false; };
+  const isPhotoReel = reel.fotos && reel.fotos.length > 0;
   const handleTouchEnd = (e: any) => {
+    if (isPhotoReel) return; // photo reels handle swipe via PhotoSlideshow
     const endX = e.nativeEvent.pageX ?? e.nativeEvent.locationX ?? 0;
     const diff = endX - swipeStartX.current;
     if (diff < -80) { swiped.current = true; onOpenProfile(); }
@@ -1050,7 +1078,7 @@ function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDel
             onPressIn={() => { longPressRef.current = setTimeout(() => setSpeedUp(true), 400); }}
             onPressOut={() => { if (longPressRef.current) clearTimeout(longPressRef.current); longPressRef.current = null; setSpeedUp(false); }}>
             {reel.fotos && reel.fotos.length > 0
-              ? <PhotoSlideshow fotos={reel.fotos} active={active} />
+              ? <PhotoSlideshow fotos={reel.fotos} active={active} onLastSwipe={onOpenProfile} />
               : <VideoPlayer url={reel.video_url} active={active}
                   filtro={reel.filtro} camaraFrontal={reel.camara_frontal || reel.hashtags?.includes("__cf__")}
                   cancionUrl={reel.cancion_url} cancionStart={reel.cancion_start ?? 0}
@@ -1098,7 +1126,7 @@ function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDel
         onPressIn={() => { longPressRef.current = setTimeout(() => setSpeedUp(true), 400); }}
         onPressOut={() => { if (longPressRef.current) clearTimeout(longPressRef.current); longPressRef.current = null; setSpeedUp(false); }}>
         {reel.fotos && reel.fotos.length > 0
-          ? <PhotoSlideshow fotos={reel.fotos} active={active} />
+          ? <PhotoSlideshow fotos={reel.fotos} active={active} onLastSwipe={onOpenProfile} />
           : <VideoPlayer url={reel.video_url} active={active}
               filtro={reel.filtro} camaraFrontal={reel.camara_frontal || reel.hashtags?.includes("__cf__")}
               cancionUrl={reel.cancion_url} cancionStart={reel.cancion_start ?? 0}
@@ -1797,7 +1825,10 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
       input.onchange = (e: any) => {
         const files = Array.from(e.target?.files ?? []).slice(0, maxMore) as File[];
         if (!files.length) return;
-        const nuevos: MediaClip[] = files.map(f => ({
+        // Si hay algún vídeo, tomar solo el primer vídeo; si solo fotos, todas
+        const hasVid = files.some(f => f.type.startsWith("video/"));
+        const filtered = hasVid ? [files.find(f => f.type.startsWith("video/"))!] : files;
+        const nuevos: MediaClip[] = filtered.map(f => ({
           id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
           uri: URL.createObjectURL(f),
           type: (f.type.startsWith("video/") || /\.(mp4|mov|webm|avi|mkv|m4v)$/i.test(f.name)) ? "video" : "photo",
@@ -1835,7 +1866,10 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
       selectionLimit: maxMore,
     });
     if (result.canceled || !result.assets?.length) return;
-    const nuevos: MediaClip[] = result.assets.map(a => ({
+    // Si hay algún vídeo, tomar solo el primer vídeo; si solo fotos, todas
+    const hasVid = result.assets.some(a => a.type === "video");
+    const filteredAssets = hasVid ? [result.assets.find(a => a.type === "video")!] : result.assets;
+    const nuevos: MediaClip[] = filteredAssets.map(a => ({
       id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
       uri: a.uri,
       type: a.type === "video" ? "video" : "photo",
@@ -1846,7 +1880,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
       fileName: a.fileName ?? (a.type === "video" ? "video.mp4" : "photo.jpg"),
     }));
     setClips(prev => [...prev, ...nuevos]);
-    setStep("detalles");
+    setTimeout(() => setStep("detalles"), 50);
   };
 
   const moveClip = (id: string, dir: -1 | 1) => {
@@ -2268,7 +2302,10 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
                     if (!files.length) return;
                     const accepted = files.filter((f: File) => f.type.startsWith("video/") || f.type.startsWith("image/"));
                     if (!accepted.length) return;
-                    const nuevos: MediaClip[] = accepted.map((f: File) => ({
+                    // Si hay algún vídeo, tomar solo el primer vídeo; si solo fotos, todas
+                    const hasVideo = accepted.some((f: File) => f.type.startsWith("video/"));
+                    const filtered = hasVideo ? [accepted.find((f: File) => f.type.startsWith("video/"))!] : accepted;
+                    const nuevos: MediaClip[] = filtered.map((f: File) => ({
                       id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
                       uri: URL.createObjectURL(f),
                       type: (f.type.startsWith("video/") || /\.(mp4|mov|webm|avi|mkv|m4v)$/i.test(f.name)) ? "video" : "photo",
@@ -2290,7 +2327,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
                     });
                     setClips(prev => [...prev, ...nuevos]);
                     setCurrentTime(0); setIsPlaying(false);
-                    setStep("detalles");
+                    setTimeout(() => setStep("detalles"), 50);
                   },
                   style: {
                     border: `2px dashed ${isDragOver ? "#1F6FEB" : "#334155"}`,
@@ -2323,7 +2360,10 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
                       input.onchange = (ev: any) => {
                         const files = Array.from(ev.target?.files ?? []) as File[];
                         if (!files.length) return;
-                        const nuevos: MediaClip[] = files.map((f: File) => ({
+                        // Si hay algún vídeo, tomar solo el primer vídeo; si solo fotos, todas
+                        const hasVid = files.some((f: File) => f.type.startsWith("video/"));
+                        const filtered = hasVid ? [files.find((f: File) => f.type.startsWith("video/"))!] : files;
+                        const nuevos: MediaClip[] = filtered.map((f: File) => ({
                           id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
                           uri: URL.createObjectURL(f),
                           type: (f.type.startsWith("video/") || /\.(mp4|mov|webm|avi|mkv|m4v)$/i.test(f.name)) ? "video" : "photo",
@@ -2345,7 +2385,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
                         });
                         setClips(prev => [...prev, ...nuevos]);
                         setCurrentTime(0); setIsPlaying(false);
-                        setStep("detalles");
+                        setTimeout(() => setStep("detalles"), 50);
                       };
                       input.click();
                     },
@@ -3106,6 +3146,8 @@ export default function ReelsScreen() {
   const [savedVideoIds, setSavedVideoIds] = useState<Set<string>>(new Set());
   const [reelParaAnadir, setReelParaAnadir] = useState<{ reel: Reel; detalle: any } | null>(null);
 
+  const feedPaused = modalSubir || !!confirmarBorrar || !!modalReceta || !!modalComentarios || modalBuscar;
+
   // Configurar audio session una sola vez al montar (necesario para iOS modo silencio)
   useEffect(() => {
     if (Platform.OS === "web") return;
@@ -3555,7 +3597,7 @@ export default function ReelsScreen() {
               Math.abs(i - activeIdx) <= 1 ? (
                 <ReelItem
                   reel={reel}
-                  active={i === activeIdx}
+                  active={i === activeIdx && !feedPaused}
                   liked={likedIds.has(reel.id)}
                   onLike={() => handleLike(reel)}
                   seguido={seguidosIds.has(reel.autor_id)}
@@ -3600,7 +3642,7 @@ export default function ReelsScreen() {
               <ReelItem
                 key={reel.id}
                 reel={reel}
-                active={i === activeIdx}
+                active={i === activeIdx && !feedPaused}
                 liked={likedIds.has(reel.id)}
                 onLike={() => handleLike(reel)}
                 seguido={seguidosIds.has(reel.autor_id)}
