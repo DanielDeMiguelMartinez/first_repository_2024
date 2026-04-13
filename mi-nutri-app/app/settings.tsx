@@ -222,7 +222,7 @@ export default function SettingsScreen() {
       await supabase.from("perfiles").delete().eq("id", userId);
       // Eliminar la cuenta de autenticación (requiere función SQL delete_current_user)
       await supabase.rpc("delete_current_user");
-    } catch {}
+    } catch (e: any) { Alert.alert("Error", e?.message || "Error al cerrar la cuenta"); }
     await AsyncStorage.clear();
     await supabase.auth.signOut();
     router.replace("/auth");
@@ -315,7 +315,7 @@ export default function SettingsScreen() {
                 ) : null}
 
                 <TouchableOpacity
-                  style={{ backgroundColor: guardando ? "#1F3A6B" : "#1F6FEB", borderRadius: 14, padding: 16, alignItems: "center", marginBottom: 24 }}
+                  style={{ backgroundColor: guardando ? "#1F3A6B" : "#1F6FEB", borderRadius: 14, padding: 16, alignItems: "center", marginBottom: 24, opacity: guardando ? 0.6 : 1 }}
                   onPress={guardarPerfil}
                   disabled={guardando}
                 >
@@ -529,6 +529,24 @@ export default function SettingsScreen() {
             <Text style={s.logoutText}>{t.logout}</Text>
           </View>
         </TouchableOpacity>
+
+        {/* Legal */}
+        <View style={s.section}>
+          <Text style={s.sectionLabel}>📜 Legal</Text>
+          <TouchableOpacity style={{ paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 10 }}
+            onPress={() => { if (Platform.OS === "web") window.open("/api/privacy", "_blank"); }}>
+            <Text style={{ color: colors.textSub, fontSize: 14 }}>🔒 Política de Privacidad</Text>
+            <Text style={{ color: colors.textMuted }}>›</Text>
+          </TouchableOpacity>
+          <View style={{ height: 1, backgroundColor: colors.cardBorder }} />
+          <TouchableOpacity style={{ paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 10 }}
+            onPress={() => { if (Platform.OS === "web") window.open("/api/terms", "_blank"); }}>
+            <Text style={{ color: colors.textSub, fontSize: 14 }}>📋 Términos de Uso</Text>
+            <Text style={{ color: colors.textMuted }}>›</Text>
+          </TouchableOpacity>
+          <View style={{ height: 1, backgroundColor: colors.cardBorder }} />
+          <Text style={{ color: colors.textMuted, fontSize: 11, paddingTop: 8 }}>Mi Nutri v1.0.0</Text>
+        </View>
 
         <TouchableOpacity style={s.deleteAccountBtn} onPress={() => setConfirmarCerrarCuenta(true)}>
           <Text style={s.deleteAccountText}>{t.closeAccountPermanently}</Text>

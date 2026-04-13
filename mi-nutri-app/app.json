@@ -3,6 +3,7 @@
     "name": "Mi Nutri",
     "slug": "mi-nutri-app",
     "version": "1.0.0",
+    "runtimeVersion": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
     "userInterfaceStyle": "automatic",
@@ -11,8 +12,10 @@
       "resizeMode": "contain",
       "backgroundColor": "#0A0F1A"
     },
+    "scheme": "minutri",
     "android": {
       "package": "com.minutri.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/logo.png",
         "backgroundColor": "#0A0F1A"
@@ -22,10 +25,22 @@
         "RECORD_AUDIO",
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            { "scheme": "https", "host": "mi-nutri-app-theta.vercel.app", "pathPrefix": "/reels" },
+            { "scheme": "minutri", "host": "*" }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
       ]
     },
     "ios": {
       "bundleIdentifier": "com.minutri.app",
+      "buildNumber": "1",
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Mi Nutri necesita acceso a la cámara para escanear códigos de barras y grabar reels",
@@ -34,7 +49,8 @@
       },
       "entitlements": {
         "com.apple.security.application-groups": ["group.com.minutri.app"]
-      }
+      },
+      "associatedDomains": ["applinks:mi-nutri-app-theta.vercel.app"]
     },
     "web": {
       "bundler": "metro",
@@ -51,6 +67,11 @@
     },
     "plugins": [
       "./plugins/withMacroWidget"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "mi-nutri-app"
+      }
+    }
   }
 }
