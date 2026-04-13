@@ -53,15 +53,19 @@ export default async function handler(req, res) {
   const base64Len = typeof image === "string" ? image.length : 0;
   if (base64Len > MAX_IMAGE_SIZE) return res.status(413).json({ error: "Image too large (max 4MB)" });
 
-  // Media type validation
+  // Media type detection
   let mediaType = "image/jpeg";
   let base64Data = image;
   if (image.startsWith("data:")) {
-    const match = image.match(/^data:(image\/\w+);base64,(.+)$/);
+    const match = image.match(/^data:(image\/[\w+]+);base64,(.+)$/);
     if (match) { mediaType = match[1]; base64Data = match[2]; }
+  } else {
+    // Auto-detect from magic bytes in base64
+    if (base64Data.startsWith("iVBOR")) mediaType = "image/png";
+    else if (base64Data.startsWith("R0lGOD")) mediaType = "image/gif";
+    else if (base64Data.startsWith("UklGR")) mediaType = "image/webp";
+    // else stays image/jpeg (default for /9j/ or others)
   }
-  const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
-  if (!ALLOWED_TYPES.includes(mediaType)) return res.status(400).json({ error: "Unsupported image format" });
 
   const LANG_NAMES = {
     es: "Spanish", en: "English", fr: "French", de: "German", zh: "Chinese",
