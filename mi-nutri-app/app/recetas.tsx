@@ -1444,7 +1444,9 @@ export default function RecetasScreen() {
           ) : (
             <ScrollView style={s.scroll} keyboardShouldPersistTaps="handled">
               <View style={s.modalHeader}>
-                <TouchableOpacity onPress={() => { setModalCrear(false); setRecetaEditando(null); setNombre(""); setDescripcion(""); setIngredientes([]); }}>
+                <TouchableOpacity onPress={() => { setModalCrear(false); setRecetaEditando(null); setNombre(""); setDescripcion(""); setIngredientes([]);
+                  if (params.from === "reels") setTimeout(() => router.push("/reels" as any), 200);
+                }}>
                   <Text style={s.back}>{t.close}</Text>
                 </TouchableOpacity>
                 <Text style={s.title}>{recetaEditando ? t.editRecipe : t.newRecipe}</Text>
