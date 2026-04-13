@@ -894,11 +894,15 @@ function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDel
     if (speedUp || swiped.current) { swiped.current = false; return; }
     const now = Date.now();
     if (now - lastTapRef.current < 300) {
-      // Double tap → like + big heart
+      // Double tap (o más) → solo dar like, nunca quitar + corazón grande
       if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
       tapTimerRef.current = null;
-      handleLike();
-      triggerBigHeart();
+      if (!liked) onLike(); // solo dar like si no lo tiene ya
+      triggerBigHeart(); // siempre mostrar corazón
+      Animated.sequence([
+        Animated.spring(likeScale, { toValue: 1.6, useNativeDriver: true, speed: 50, bounciness: 14 }),
+        Animated.spring(likeScale, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 4 }),
+      ]).start();
     } else {
       // Single tap → esperar para ver si es double
       tapTimerRef.current = setTimeout(() => {
