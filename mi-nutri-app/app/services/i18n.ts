@@ -33,9 +33,9 @@ export const LANGUAGE_NAMES_EN: Record<Language, string> = {
 };
 
 export const LANGUAGE_FLAGS: Record<Language, string> = {
-  es: "🇪🇸", en: "🇬🇧🇺🇸", fr: "🇫🇷", de: "🇩🇪", zh: "🇨🇳",
-  pt: "🇧🇷", it: "🇮🇹", nl: "🇳🇱", pl: "🇵🇱", ru: "🇷🇺",
-  ar: "🇸🇦", ja: "🇯🇵", ko: "🇰🇷", hi: "🇮🇳", tr: "🇹🇷",
+  es: "🇪🇸🇲🇽", en: "🇬🇧🇺🇸", fr: "🇫🇷🇨🇦", de: "🇩🇪", zh: "🇨🇳🇹🇼",
+  pt: "🇧🇷🇵🇹", it: "🇮🇹", nl: "🇳🇱", pl: "🇵🇱", ru: "🇷🇺",
+  ar: "🇸🇦🇲🇦", ja: "🇯🇵", ko: "🇰🇷", hi: "🇮🇳", tr: "🇹🇷",
   vi: "🇻🇳", id: "🇮🇩", th: "🇹🇭", uk: "🇺🇦", ro: "🇷🇴",
   el: "🇬🇷", cs: "🇨🇿", sv: "🇸🇪", hu: "🇭🇺", ca: "🏴",
   he: "🇮🇱", nb: "🇳🇴", fi: "🇫🇮", da: "🇩🇰", sk: "🇸🇰",
