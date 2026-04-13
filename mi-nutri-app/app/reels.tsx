@@ -536,8 +536,9 @@ function PhotoSlideshow({ fotos, active, onLastSwipe }: { fotos: string[]; activ
 
   useEffect(() => { if (active) setCurrent(0); }, [active]);
 
-  if (Platform.OS === "web") {
-    // Web: CSS scroll-snap horizontal
+  const isDesktop = Platform.OS === "web" && SW >= 768;
+  if (isDesktop) {
+    // Web desktop: CSS scroll-snap horizontal
     return (
       <View style={{ flex: 1, backgroundColor: "#000" }}>
         {(React.createElement as any)("div", {
@@ -616,8 +617,14 @@ function PhotoSlideshow({ fotos, active, onLastSwipe }: { fotos: string[]; activ
           }
         }}>
         {fotos.map((uri, i) => (
-          <View key={i} style={{ width: SW, flex: 1 }}>
-            <Image source={{ uri }} style={{ width: SW, flex: 1, backgroundColor: "#000" }} resizeMode="contain" />
+          <View key={i} style={{ width: SW, height: "100%" as any }}>
+            {Platform.OS === "web"
+              ? (React.createElement as any)("img", {
+                  src: uri,
+                  style: { width: "100%", height: "100%", objectFit: "contain", display: "block", backgroundColor: "#000" },
+                })
+              : <Image source={{ uri }} style={{ width: SW, height: "100%" as any, backgroundColor: "#000" }} resizeMode="contain" />
+            }
           </View>
         ))}
       </ScrollView>
