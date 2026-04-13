@@ -16,6 +16,8 @@ import { supabase } from "./services/supabase";
 import { setUserLanguage } from "./services/openFoodFacts";
 import { setD1TokenProvider } from "./services/d1";
 import { setAnalyticsUser, trackEvent, Events } from "./services/analytics";
+import { loadQueue, processQueue, startAutoSync } from "./services/offlineQueue";
+import { requestNotificationPermission, startReminderCheck } from "./services/pushNotifications";
 
 // Inyectar proveedor de JWT para que el proxy D1 autentique con Supabase
 setD1TokenProvider(() =>
@@ -302,7 +304,7 @@ export default function RootLayout() {
       async (event, session) => {
         if (event === "INITIAL_SESSION") {
           initialHandled = true;
-          if (session?.user?.id) { setAnalyticsUser(session.user.id); trackEvent(Events.APP_OPEN); }
+          if (session?.user?.id) { setAnalyticsUser(session.user.id); trackEvent(Events.APP_OPEN); loadQueue().then(processQueue); startAutoSync(); requestNotificationPermission(); startReminderCheck(); }
           await validarSesionInicial(session);
         } else if (event === "SIGNED_IN" && !initialHandled) {
           initialHandled = true;

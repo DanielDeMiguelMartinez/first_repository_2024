@@ -50,6 +50,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase";
+import { enqueue } from "./offlineQueue";
 
 const MIGRATION_KEY = "nutri_cloud_migration_v2";
 
@@ -57,7 +58,7 @@ const MIGRATION_KEY = "nutri_cloud_migration_v2";
 // Comidas del día
 // ────────────────────────────────────────────────────────────
 
-/** Sincroniza el snapshot completo de un día con Supabase (no bloquea). */
+/** Sincroniza el snapshot completo de un día con Supabase (no bloquea). Si falla, encola. */
 export function syncDayToCloud(dateKey: string, meals: any): void {
   (async () => {
     try {
@@ -65,11 +66,15 @@ export function syncDayToCloud(dateKey: string, meals: any): void {
       const uid = ses.session?.user?.id;
       if (!uid) return;
       const fecha = dateKey.replace("nutri_meals_", "");
-      await supabase.from("registros_diarios").upsert(
+      const { error } = await supabase.from("registros_diarios").upsert(
         { user_id: uid, fecha, comidas: meals, actualizado_en: new Date().toISOString() },
         { onConflict: "user_id,fecha" }
       );
-    } catch {}
+      if (error) throw error;
+    } catch {
+      // Offline o error → encolar para retry
+      enqueue({ type: "sync_day", data: { dateKey, meals } });
+    }
   })();
 }
 
