@@ -964,20 +964,29 @@ export default function HomeScreen() {
       const alergias = alergiasRaw ? JSON.parse(alergiasRaw) : [];
       const baseUrl = Platform.OS === "web" ? "" : (process.env.EXPO_PUBLIC_API_URL || "https://mi-nutri-app-theta.vercel.app");
       const { data: { session: authSes } } = await supabase.auth.getSession();
-      const res = await fetch(`${baseUrl}/api/generate-meal-plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(authSes?.access_token ? { "Authorization": `Bearer ${authSes.access_token}` } : {}) },
-        body: JSON.stringify({
-          weight: profile.peso, height: profile.altura, age: profile.edad,
-          sex: profile.sexo, activity: profile.actividad, goal: profile.objetivo,
-          mealFrequency: mealFreq, allergies: alergias,
-          cuisine: planCuisine, restriction: planRestriction,
-          budget: planBudget, cookingTime: planCookingTime, language,
-          calorieGoal: g.calories, proteinGoal: g.protein, carbsGoal: g.carbs, fatGoal: g.fat,
-        }),
-      });
-      if (!res.ok) { const err = await res.json().catch(() => ({ error: "Error" })); setPlanError(err.error || "Error"); setPlanStep("cuisine"); return; }
-      const plan = await res.json();
+      const headers: any = { "Content-Type": "application/json", ...(authSes?.access_token ? { "Authorization": `Bearer ${authSes.access_token}` } : {}) };
+      const baseBody = {
+        weight: profile.peso, height: profile.altura, age: profile.edad,
+        sex: profile.sexo, activity: profile.actividad, goal: profile.objetivo,
+        mealFrequency: mealFreq, allergies: alergias,
+        cuisine: planCuisine, restriction: planRestriction,
+        budget: planBudget, cookingTime: planCookingTime, language,
+        calorieGoal: g.calories, proteinGoal: g.protein, carbsGoal: g.carbs, fatGoal: g.fat,
+      };
+      // Generar día por día (7 llamadas rápidas en vez de 1 larga)
+      const DAYS = language === "en" ? ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+        : ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
+      const days: any[] = [];
+      for (let i = 0; i < 7; i++) {
+        const res = await fetch(`${baseUrl}/api/generate-meal-plan`, {
+          method: "POST", headers,
+          body: JSON.stringify({ ...baseBody, dayName: DAYS[i], dayIndex: i }),
+        });
+        if (!res.ok) throw new Error(`Error día ${i + 1}`);
+        const dayPlan = await res.json();
+        days.push(dayPlan);
+      }
+      const plan = { days };
       setWeeklyPlan(plan); await AsyncStorage.setItem("nutri_weekly_plan", JSON.stringify(plan));
       setPlanModal(false); setPlanDayIdx(0);
     } catch (e: any) { setPlanError(e.message || "Error"); setPlanStep("cuisine"); }

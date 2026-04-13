@@ -1,12 +1,13 @@
 // POST /api/generate-meal-plan
-// Generates a personalized weekly meal plan using Claude API
+// Generates ONE day of a meal plan (call 7 times for a full week)
 
 import { createClient } from "@supabase/supabase-js";
 
-const RATE_WINDOW_MS = 300_000; // 5 min
-const RATE_MAX = 3; // 3 plans per 5 min
-const rateBuckets = new Map();
+export const maxDuration = 15;
 
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX = 10;
+const rateBuckets = new Map();
 function checkRate(uid) {
   const now = Date.now();
   const bucket = rateBuckets.get(uid) ?? [];
@@ -27,119 +28,73 @@ async function verifyAuth(req) {
   } catch { return null; }
 }
 
-export const maxDuration = 60; // Vercel Pro: hasta 60s
-
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
-
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
 
-  // Auth (optional if SUPABASE_URL not configured)
   let uid = "anonymous";
   if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
     uid = await verifyAuth(req) || "anonymous";
   }
-
-  // Rate limit
-  if (!checkRate(uid)) return res.status(429).json({ error: "Too many requests. Wait 5 minutes." });
+  if (!checkRate(uid)) return res.status(429).json({ error: "Too many requests" });
 
   const {
     weight, height, age, sex, activity, goal,
     mealFrequency, allergies, cuisine, restriction,
     budget, cookingTime, language,
     calorieGoal, proteinGoal, carbsGoal, fatGoal,
+    dayName, dayIndex,
   } = req.body;
 
-  // Input validation
   const w = Number(weight), h = Number(height), a = Number(age);
   if (!w || w < 20 || w > 300) return res.status(400).json({ error: "Invalid weight" });
   if (!h || h < 100 || h > 250) return res.status(400).json({ error: "Invalid height" });
   if (!a || a < 10 || a > 100) return res.status(400).json({ error: "Invalid age" });
 
-  // Map meal frequency to slot names
   let slots;
   if (typeof mealFrequency === "string" && mealFrequency.includes(",")) {
     slots = mealFrequency.split(",");
   } else {
-    const FREQ_SLOTS = {
-      "2": ["comida", "cena"],
-      "3": ["desayuno", "comida", "cena"],
-      "4": ["desayuno", "comida", "merienda", "cena"],
-      "5": ["desayuno", "snack1", "comida", "merienda", "cena"],
-      "6": ["desayuno", "snack1", "comida", "merienda", "cena", "snack2"],
-    };
-    slots = FREQ_SLOTS[mealFrequency] || FREQ_SLOTS["4"];
+    const FREQ = { "2": ["comida","cena"], "3": ["desayuno","comida","cena"], "4": ["desayuno","comida","merienda","cena"], "5": ["desayuno","snack1","comida","merienda","cena"], "6": ["desayuno","snack1","comida","merienda","cena","snack2"] };
+    slots = FREQ[mealFrequency] || FREQ["4"];
   }
 
-  const LANG_NAMES = {
-    es: "Spanish", en: "English", fr: "French", de: "German", zh: "Chinese",
-    pt: "Portuguese", it: "Italian", nl: "Dutch", pl: "Polish", ru: "Russian",
-  };
-  const langName = LANG_NAMES[language] || "Spanish";
+  const LANGS = { es:"Spanish", en:"English", fr:"French", de:"German", zh:"Chinese", pt:"Portuguese", it:"Italian" };
+  const langName = LANGS[language] || "Spanish";
+  const day = dayName || "Lunes";
 
-  const DAY_NAMES = {
-    es: ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"],
-    en: ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],
-  };
-  const days = DAY_NAMES[language] || DAY_NAMES.es;
+  const prompt = `Generate a meal plan for ONE day (${day}).
+Profile: ${w}kg, ${h}cm, ${a}yo, ${sex}, ${activity}, goal:${goal}
+Targets: ${calorieGoal||2000}kcal, ${proteinGoal||150}g P, ${carbsGoal||250}g C, ${fatGoal||65}g F
+Allergies: ${allergies?.length ? allergies.join(",") : "none"}
+Diet: ${restriction||"none"}, Cuisine: ${cuisine||"mixed"}, Budget: ${budget||"medium"}, Time: ${cookingTime||"medium"}
+Meals: ${slots.join(", ")}
 
-  const prompt = `You are a professional nutritionist. Generate a complete 7-day meal plan.
+Each meal: name, ingredients(name,grams,kcal,protein,carbs,fat), totals, 2 alternative meals.
+ALL text in ${langName}. ONLY valid JSON, no markdown:
+{"day":"${day}","meals":{"${slots[0]}":{"name":"...","ingredients":[{"name":"...","grams":100,"kcal":200,"protein":20,"carbs":25,"fat":8,"alternatives":[{"name":"...","grams":100,"kcal":195,"protein":19,"carbs":26,"fat":7}]}],"totals":{"kcal":400,"protein":35,"carbs":45,"fat":15},"alternatives":[{"name":"...","ingredients":[{"name":"...","grams":100,"kcal":200,"protein":20,"carbs":25,"fat":8,"alternatives":[]}],"totals":{"kcal":395,"protein":34,"carbs":46,"fat":14}}]}},"dayTotals":{"kcal":2000,"protein":150,"carbs":250,"fat":65}}`;
 
-USER PROFILE:
-- Weight: ${w} kg, Height: ${h} cm, Age: ${a}, Sex: ${sex}
-- Activity level: ${activity}
-- Goal: ${goal}
-- Daily targets: ${calorieGoal || 2000} kcal, ${proteinGoal || 150}g protein, ${carbsGoal || 250}g carbs, ${fatGoal || 65}g fat
-- Allergies: ${allergies?.length ? allergies.join(", ") : "none"}
-- Dietary restriction: ${restriction || "none"}
-- Cuisine preference: ${cuisine || "mixed"}
-- Budget: ${budget || "medium"}
-- Cooking time: ${cookingTime || "medium"}
-- Meal slots per day: ${slots.join(", ")}
-
-Generate 7 days (${days.join(", ")}). Each meal: name, ingredients (name+grams+macros), totals, 2 meal alternatives with similar macros. Keep ingredient alternatives minimal (1 each).
-ALL text in ${langName}. Be concise. Distribute calories logically.
-
-RESPOND WITH ONLY VALID JSON:
-{"days":[{"day":"${days[0]}","meals":{"${slots[0]}":{"name":"...","ingredients":[{"name":"...","grams":150,"kcal":200,"protein":25,"carbs":10,"fat":8,"alternatives":[{"name":"...","grams":140,"kcal":195,"protein":24,"carbs":11,"fat":7},{"name":"...","grams":160,"kcal":205,"protein":26,"carbs":9,"fat":9}]}],"totals":{"kcal":450,"protein":35,"carbs":40,"fat":18},"alternatives":[{"name":"...","ingredients":[...],"totals":{...}},{"name":"...","ingredients":[...],"totals":{...}}]}},"dayTotals":{"kcal":2000,"protein":150,"carbs":250,"fat":65}}]}`;
-
-  // Retry up to 2 times
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": key,
-          "anthropic-version": "2023-06-01",
-        },
+        headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 8000,
+          max_tokens: 3000,
           messages: [{ role: "user", content: prompt }],
         }),
       });
-
-      if (!response.ok) {
-        if (attempt < 1) continue;
-        return res.status(response.status).json({ error: "API error" });
-      }
-
+      if (!response.ok) { if (attempt < 1) continue; return res.status(500).json({ error: "API error" }); }
       const data = await response.json();
       const text = data.content?.[0]?.text ?? "";
       const jsonStr = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      const plan = JSON.parse(jsonStr);
-
-      if (!plan.days || !Array.isArray(plan.days) || plan.days.length < 7) {
-        if (attempt < 1) continue;
-        return res.status(500).json({ error: "Invalid plan structure" });
-      }
-
-      return res.status(200).json(plan);
+      const dayPlan = JSON.parse(jsonStr);
+      return res.status(200).json(dayPlan);
     } catch (e) {
       if (attempt < 1) continue;
-      return res.status(500).json({ error: "Failed to generate plan" });
+      return res.status(500).json({ error: "Failed to generate" });
     }
   }
 }
