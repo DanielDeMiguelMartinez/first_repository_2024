@@ -35,9 +35,11 @@ export default async function handler(req, res) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
 
-  // Auth
-  const uid = await verifyAuth(req);
-  if (!uid) return res.status(401).json({ error: "Unauthorized" });
+  // Auth (optional if SUPABASE_URL not configured)
+  let uid = "anonymous";
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    uid = await verifyAuth(req) || "anonymous";
+  }
 
   // Rate limit
   if (!checkRate(uid)) return res.status(429).json({ error: "Too many requests. Wait 1 minute." });
