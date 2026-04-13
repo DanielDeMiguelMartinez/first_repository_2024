@@ -37,11 +37,12 @@ JSON only, ${lang}, no markdown:
         body: JSON.stringify({ model: "claude-3-haiku-20240307", max_tokens: 1500, messages: [{ role: "user", content: prompt }] }),
       });
       if (!response.ok) {
+        const errText = await response.text().catch(() => "");
         if (attempt < 1) continue;
         const status = response.status;
-        if (status === 529 || status === 503) return new Response(JSON.stringify({ error: "El servicio de IA está saturado. Inténtalo en unos minutos." }), { status: 503 });
-        if (status === 402) return new Response(JSON.stringify({ error: "Créditos de IA agotados." }), { status: 402 });
-        return new Response(JSON.stringify({ error: "Error al generar el plan." }), { status: 500 });
+        if (status === 529 || status === 503) return new Response(JSON.stringify({ error: "IA saturada. Inténtalo en unos minutos." }), { status: 503 });
+        if (status === 402) return new Response(JSON.stringify({ error: "Créditos agotados." }), { status: 402 });
+        return new Response(JSON.stringify({ error: "Error API: " + status + " " + errText.slice(0, 200) }), { status: 500 });
       }
       const data = await response.json();
       const text = data.content?.[0]?.text ?? "";
