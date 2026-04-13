@@ -485,8 +485,8 @@ export default function SettingsScreen() {
         </View>
 
         <Modal visible={showLangModal} transparent animationType="slide" onRequestClose={() => setShowLangModal(false)}>
-          <View style={{ flex: 1, backgroundColor: "#000000CC", justifyContent: "flex-end" }}>
-            <View style={{ backgroundColor: colors.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 20, paddingBottom: 40, maxHeight: "80%" }}>
+          <TouchableOpacity style={{ flex: 1, backgroundColor: "#000000CC", justifyContent: "flex-end" }} activeOpacity={1} onPress={() => setShowLangModal(false)}>
+            <View style={{ backgroundColor: colors.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 20, paddingBottom: 40, maxHeight: "80%" }} onStartShouldSetResponder={() => true}>
               <View style={{ paddingHorizontal: 20, marginBottom: 12 }}>
                 <Text style={{ color: colors.text, fontSize: 18, fontWeight: "800", marginBottom: 12 }}>🌍 {t.chooseLanguage}</Text>
                 <TextInput
@@ -520,7 +520,7 @@ export default function SettingsScreen() {
                 )}
               />
             </View>
-          </View>
+          </TouchableOpacity>
         </Modal>
 
         <TouchableOpacity style={s.logoutBtn} onPress={handleLogout}>
