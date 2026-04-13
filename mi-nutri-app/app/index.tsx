@@ -639,7 +639,7 @@ function FoodRow({ food, onEdit, onDelete }: { food: FoodEntry; onEdit: () => vo
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { t, colors, theme, language } = useApp();
+  const { t, colors, theme, language, isOnline } = useApp();
 
   const MET_LABELS: Record<string, string> = {
     walking: t.actWalking, running: t.actRunning, cycling: t.actCycling,
@@ -948,6 +948,7 @@ export default function HomeScreen() {
 
   // ── Plan semanal: generar y swap ──────────────────────────────────────────
   const generatePlan = async () => {
+    if (!isOnline) { setPlanError(t.noConnection); return; }
     setPlanStep("generating"); setPlanError("");
     try {
       const profile = await supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -962,9 +963,10 @@ export default function HomeScreen() {
       const alergiasRaw = await AsyncStorage.getItem("nutri_alergias");
       const alergias = alergiasRaw ? JSON.parse(alergiasRaw) : [];
       const baseUrl = Platform.OS === "web" ? "" : (process.env.EXPO_PUBLIC_API_URL || "https://mi-nutri-app-theta.vercel.app");
+      const { data: { session: authSes } } = await supabase.auth.getSession();
       const res = await fetch(`${baseUrl}/api/generate-meal-plan`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(authSes?.access_token ? { "Authorization": `Bearer ${authSes.access_token}` } : {}) },
         body: JSON.stringify({
           weight: profile.peso, height: profile.altura, age: profile.edad,
           sex: profile.sexo, activity: profile.actividad, goal: profile.objetivo,

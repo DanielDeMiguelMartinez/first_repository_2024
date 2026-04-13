@@ -2251,22 +2251,22 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
               uploadBlob = await r.blob();
               contentType = uploadBlob.type || "image/jpeg";
             } else {
-              console.error("[subir foto] sin file ni uri", foto);
+              // console.error("[subir foto] sin file ni uri", foto);
               continue;
             }
             const ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
             const fpath = `${userId}/fotos/${Date.now()}_${i}.${ext}`;
-            console.log("[subir foto]", i, fpath, uploadBlob.size, contentType);
+            // console.log("[subir foto]", i, fpath, uploadBlob.size, contentType);
             const { error: fErr } = await supabase.storage
               .from("videos").upload(fpath, uploadBlob, { contentType, upsert: false });
             if (!fErr) {
               fotosUrls.push(supabase.storage.from("videos").getPublicUrl(fpath).data.publicUrl);
             } else {
-              console.error("[subir foto error]", fErr.message);
+              // console.error("[subir foto error]", fErr.message);
               Alert.alert("Error foto " + (i + 1), fErr.message);
             }
           } catch (e: any) {
-            console.error("[subir foto exception]", e?.message);
+            // console.error("[subir foto exception]", e?.message);
           }
           setProgreso(50 + Math.round((i + 1) / effectiveFotos.length * 30));
         }
@@ -2305,7 +2305,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
       };
 
       setProgreso(90);
-      console.log("[reel] insertando en BD...", JSON.stringify(rowCompleto).slice(0, 200));
+      // console.log("[reel] insertando en BD...", JSON.stringify(rowCompleto).slice(0, 200));
 
       // Helper: insert con timeout de 15s
       const insertWithTimeout = async (row: any) => {
@@ -2318,14 +2318,14 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
       // Intento 1: completo
       const r1 = await insertWithTimeout(rowCompleto);
       dbErr = r1.error;
-      console.log("[reel] intento 1:", dbErr ? dbErr.message : "OK");
+      // console.log("[reel] intento 1:", dbErr ? dbErr.message : "OK");
 
       // Intento 2: sin columnas opcionales
       if (dbErr) {
         const { cancion_volumen, mute_video, autor_avatar, cancion_start, ...rowBase } = rowCompleto;
         const r2 = await insertWithTimeout(rowBase);
         dbErr = r2.error;
-        console.log("[reel] intento 2:", dbErr ? dbErr.message : "OK");
+        // console.log("[reel] intento 2:", dbErr ? dbErr.message : "OK");
       }
 
       // Intento 3: mínimo
@@ -2333,7 +2333,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
         const rowMin = { autor: base.autor, autor_id: base.autor_id, titulo: base.titulo, descripcion: base.descripcion, video_url: publicUrl || "", likes: 0, language };
         const r3 = await insertWithTimeout(rowMin);
         dbErr = r3.error;
-        console.log("[reel] intento 3:", dbErr ? dbErr.message : "OK");
+        // console.log("[reel] intento 3:", dbErr ? dbErr.message : "OK");
       }
 
       setSubiendo(false);

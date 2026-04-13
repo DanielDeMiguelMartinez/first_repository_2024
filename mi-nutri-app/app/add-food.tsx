@@ -669,12 +669,14 @@ export default function AddFoodScreen() {
 
   const analyzePhoto = async (base64: string, uri: string) => {
     setPhotoUri(uri);
+    if (!isOnline) { setPhotoError(t.noConnection); return; }
     setAnalyzingPhoto(true); setPhotoError(""); setPhotoAnalysis(null);
     try {
       const baseUrl = Platform.OS === "web" ? "" : (process.env.EXPO_PUBLIC_API_URL || "https://mi-nutri-app-theta.vercel.app");
+      const { data: { session: authSes } } = await supabase.auth.getSession();
       const res = await fetch(`${baseUrl}/api/analyze-food-photo`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(authSes?.access_token ? { "Authorization": `Bearer ${authSes.access_token}` } : {}) },
         body: JSON.stringify({ image: base64, language }),
       });
       if (!res.ok) { setPhotoError(t.photoAnalysisError); setAnalyzingPhoto(false); return; }

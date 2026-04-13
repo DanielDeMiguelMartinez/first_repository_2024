@@ -2,13 +2,38 @@
   "expo": {
     "name": "Mi Nutri",
     "slug": "mi-nutri-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/logo.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0A0F1A"
+    },
     "android": {
-      "package": "com.anonymous.minutriapp"
+      "package": "com.minutri.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/logo.png",
+        "backgroundColor": "#0A0F1A"
+      },
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "ios": {
-      "bundleIdentifier": "com.anonymous.minutriapp",
+      "bundleIdentifier": "com.minutri.app",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Mi Nutri necesita acceso a la cámara para escanear códigos de barras y grabar reels",
+        "NSMicrophoneUsageDescription": "Mi Nutri necesita acceso al micrófono para grabar reels con audio",
+        "NSPhotoLibraryUsageDescription": "Mi Nutri necesita acceso a tus fotos para subir reels y analizar comida"
+      },
       "entitlements": {
-        "com.apple.security.application-groups": ["group.com.anonymous.minutriapp"]
+        "com.apple.security.application-groups": ["group.com.minutri.app"]
       }
     },
     "web": {
