@@ -580,7 +580,7 @@ function PhotoSlideshow({ fotos, active, onLastSwipe }: { fotos: string[]; activ
             },
               (React.createElement as any)("img", {
                 src: uri,
-                style: { width: "100%", height: "100%", objectFit: "cover", display: "block" },
+                style: { width: "100%", height: "100%", objectFit: "contain", display: "block", backgroundColor: "#000" },
               })
             )
           )
@@ -617,7 +617,7 @@ function PhotoSlideshow({ fotos, active, onLastSwipe }: { fotos: string[]; activ
         }}>
         {fotos.map((uri, i) => (
           <View key={i} style={{ width: SW, flex: 1 }}>
-            <Image source={{ uri }} style={{ width: SW, flex: 1 }} resizeMode="cover" />
+            <Image source={{ uri }} style={{ width: SW, flex: 1, backgroundColor: "#000" }} resizeMode="contain" />
           </View>
         ))}
       </ScrollView>
