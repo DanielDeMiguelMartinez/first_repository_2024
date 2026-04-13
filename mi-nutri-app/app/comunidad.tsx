@@ -20,7 +20,7 @@ import {
 } from "react-native";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
-type Publicacion = {
+export type Publicacion = {
   id: string;
   nombre_receta: string;
   descripcion: string;
@@ -95,7 +95,7 @@ function Estrellas({ valor, size = 16, onPress, starColor }: {
 }
 
 // ─── Modal detalle de publicación ─────────────────────────────────────────────
-function ModalDetalle({
+export function ModalDetalle({
   pub,
   visible,
   onClose,
