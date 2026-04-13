@@ -3746,6 +3746,7 @@ export default function ReelsScreen() {
       )}
 
       {/* ── Header superpuesto ── */}
+      <View style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 19, height: 100, background: "linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 70%, transparent 100%)" } as any} pointerEvents="none" />
       <SafeAreaView style={h.wrap} pointerEvents="box-none">
         <View style={h.row} pointerEvents="box-none">
           <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace("/" as any)} style={{ minWidth: 70 }}>
