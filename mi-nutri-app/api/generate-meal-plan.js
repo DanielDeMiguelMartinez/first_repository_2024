@@ -1,49 +1,19 @@
-// POST /api/generate-meal-plan — ONE day, minimal prompt for speed
+// POST /api/generate-meal-plan — ONE day, edge runtime for 30s timeout
 
-import { createClient } from "@supabase/supabase-js";
+export const config = { runtime: 'edge' };
 
-export const maxDuration = 15;
-
-const RATE_WINDOW_MS = 60_000;
-const RATE_MAX = 15;
-const rateBuckets = new Map();
-function checkRate(uid) {
-  const now = Date.now();
-  const bucket = rateBuckets.get(uid) ?? [];
-  const recent = bucket.filter(t => now - t < RATE_WINDOW_MS);
-  if (recent.length >= RATE_MAX) return false;
-  recent.push(now);
-  rateBuckets.set(uid, recent);
-  return true;
-}
-
-async function verifyAuth(req) {
-  const token = req.headers.authorization?.split("Bearer ")[1];
-  if (!token) return null;
-  try {
-    const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-    const { data } = await sb.auth.getUser(token);
-    return data?.user?.id ?? null;
-  } catch { return null; }
-}
-
-export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+export default async function handler(req) {
+  if (req.method !== "POST") return new Response(JSON.stringify({ error: "POST only" }), { status: 405 });
   const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+  if (!key) return new Response(JSON.stringify({ error: "ANTHROPIC_API_KEY not configured" }), { status: 500 });
 
-  let uid = "anonymous";
-  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    uid = await verifyAuth(req) || "anonymous";
-  }
-  if (!checkRate(uid)) return res.status(429).json({ error: "Too many requests" });
-
-  const { weight, height, age, sex, goal, mealFrequency, allergies, cuisine, restriction, cookingTime, language, calorieGoal, proteinGoal, carbsGoal, fatGoal, dayName } = req.body;
+  const body = await req.json();
+  const { weight, height, age, sex, goal, mealFrequency, allergies, cuisine, restriction, cookingTime, language, calorieGoal, proteinGoal, carbsGoal, fatGoal, dayName } = body;
 
   const w = Number(weight), h = Number(height), a = Number(age);
-  if (!w || w < 20 || w > 300) return res.status(400).json({ error: "Invalid weight" });
-  if (!h || h < 100 || h > 250) return res.status(400).json({ error: "Invalid height" });
-  if (!a || a < 10 || a > 100) return res.status(400).json({ error: "Invalid age" });
+  if (!w || w < 20 || w > 300) return new Response(JSON.stringify({ error: "Invalid weight" }), { status: 400 });
+  if (!h || h < 100 || h > 250) return new Response(JSON.stringify({ error: "Invalid height" }), { status: 400 });
+  if (!a || a < 10 || a > 100) return new Response(JSON.stringify({ error: "Invalid age" }), { status: 400 });
 
   let slots;
   if (typeof mealFrequency === "string" && mealFrequency.includes(",")) slots = mealFrequency.split(",");
@@ -53,7 +23,6 @@ export default async function handler(req, res) {
   const lang = L[language]||"Spanish";
   const day = dayName || "Lunes";
 
-  // Ultra-short prompt for speed
   const prompt = `${day} meal plan. ${w}kg ${sex} ${goal} ${calorieGoal||2000}kcal ${proteinGoal||150}gP. Allergies:${allergies?.length?allergies.join(","):"none"}. ${restriction||"none"} ${cuisine||"mixed"} ${cookingTime||"medium"}.
 Meals:${slots.join(",")}.
 JSON only, ${lang}, no markdown:
@@ -70,17 +39,17 @@ JSON only, ${lang}, no markdown:
       if (!response.ok) {
         if (attempt < 1) continue;
         const status = response.status;
-        if (status === 529 || status === 503) return res.status(503).json({ error: "El servicio de IA está saturado. Inténtalo en unos minutos." });
-        if (status === 402) return res.status(402).json({ error: "Créditos de IA agotados." });
-        return res.status(500).json({ error: "Error al generar el plan." });
+        if (status === 529 || status === 503) return new Response(JSON.stringify({ error: "El servicio de IA está saturado. Inténtalo en unos minutos." }), { status: 503 });
+        if (status === 402) return new Response(JSON.stringify({ error: "Créditos de IA agotados." }), { status: 402 });
+        return new Response(JSON.stringify({ error: "Error al generar el plan." }), { status: 500 });
       }
       const data = await response.json();
       const text = data.content?.[0]?.text ?? "";
       const jsonStr = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      return res.status(200).json(JSON.parse(jsonStr));
+      return new Response(jsonStr, { status: 200, headers: { "Content-Type": "application/json" } });
     } catch (e) {
       if (attempt < 1) continue;
-      return res.status(500).json({ error: "Error al generar" });
+      return new Response(JSON.stringify({ error: "Error al generar" }), { status: 500 });
     }
   }
 }
