@@ -121,9 +121,11 @@ Be as accurate as possible with portion sizes.`;
       });
 
       if (!response.ok) {
-        const err = await response.text();
-        if (attempt < 1) continue; // retry
-        return res.status(response.status).json({ error: "API error" });
+        if (attempt < 1) continue;
+        const status = response.status;
+        if (status === 529 || status === 503) return res.status(503).json({ error: "El servicio de IA está saturado. Inténtalo en unos minutos." });
+        if (status === 402) return res.status(402).json({ error: "Créditos de IA agotados." });
+        return res.status(500).json({ error: "Error al analizar la foto. Inténtalo de nuevo." });
       }
 
       const data = await response.json();

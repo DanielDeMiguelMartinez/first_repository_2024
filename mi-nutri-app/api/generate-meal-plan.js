@@ -86,7 +86,13 @@ ALL text in ${langName}. ONLY valid JSON, no markdown:
           messages: [{ role: "user", content: prompt }],
         }),
       });
-      if (!response.ok) { if (attempt < 1) continue; return res.status(500).json({ error: "API error" }); }
+      if (!response.ok) {
+        if (attempt < 1) continue;
+        const status = response.status;
+        if (status === 529 || status === 503) return res.status(503).json({ error: "El servicio de IA está saturado. Inténtalo de nuevo en unos minutos." });
+        if (status === 402) return res.status(402).json({ error: "Créditos de IA agotados." });
+        return res.status(500).json({ error: "Error al generar el plan. Inténtalo de nuevo." });
+      }
       const data = await response.json();
       const text = data.content?.[0]?.text ?? "";
       const jsonStr = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
