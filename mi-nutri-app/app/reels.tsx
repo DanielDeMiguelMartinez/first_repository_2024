@@ -531,34 +531,98 @@ function MusicPickerModal({ visible, onClose, onSelect, videoDuration = 0 }: {
 // ─── Slideshow de fotos ────────────────────────────────────────────────────────
 function PhotoSlideshow({ fotos, active, onLastSwipe }: { fotos: string[]; active: boolean; onLastSwipe?: () => void }) {
   const [current, setCurrent] = useState(0);
-  const scrollRef = useRef<any>(null);
   const { width: SW } = useWindowDimensions();
-  const touchStartX = useRef(0);
+  const lastSwipeRef = useRef(0);
 
+  useEffect(() => { if (active) setCurrent(0); }, [active]);
+
+  if (Platform.OS === "web") {
+    // Web: CSS scroll-snap horizontal
+    return (
+      <View style={{ flex: 1, backgroundColor: "#000" }}>
+        {(React.createElement as any)("div", {
+          ref: (el: any) => {
+            if (el && !el._setup) {
+              el._setup = true;
+              el.style.cssText = "display:flex;overflow-x:scroll;scroll-snap-type:x mandatory;height:100%;scrollbar-width:none;-webkit-overflow-scrolling:touch;";
+              el.addEventListener("scroll", () => {
+                const idx = Math.round(el.scrollLeft / el.clientWidth);
+                setCurrent(idx);
+                // Detectar swipe extra en la última foto
+                if (idx >= fotos.length - 1) {
+                  const maxScroll = el.scrollWidth - el.clientWidth;
+                  if (el.scrollLeft >= maxScroll - 5) {
+                    const now = Date.now();
+                    if (now - lastSwipeRef.current > 800) {
+                      lastSwipeRef.current = now;
+                      // Siguiente swipe en la última foto → perfil
+                      el._atEnd = true;
+                    }
+                  }
+                } else {
+                  el._atEnd = false;
+                }
+              }, { passive: true });
+              // Detectar touch en la última
+              el.addEventListener("touchend", () => {
+                if (el._atEnd && onLastSwipe) {
+                  onLastSwipe();
+                  el._atEnd = false;
+                }
+              });
+            }
+          },
+        },
+          fotos.map((uri: string, i: number) =>
+            (React.createElement as any)("div", {
+              key: i,
+              style: { scrollSnapAlign: "start", minWidth: "100%", height: "100%", flexShrink: 0 },
+            },
+              (React.createElement as any)("img", {
+                src: uri,
+                style: { width: "100%", height: "100%", objectFit: "cover", display: "block" },
+              })
+            )
+          )
+        )}
+        {fotos.length > 1 && (
+          <View style={{ position: "absolute", bottom: 12, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 5 }} pointerEvents="none">
+            {fotos.map((_: string, i: number) => (
+              <View key={i} style={{ width: i === current ? 16 : 6, height: 6, borderRadius: 3,
+                backgroundColor: i === current ? "#fff" : "rgba(255,255,255,0.4)" }} />
+            ))}
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  // Native: ScrollView horizontal con pagingEnabled
   return (
-    <View style={{ flex: 1, backgroundColor: "#000" }}
-      onTouchStart={(e: any) => { touchStartX.current = e.nativeEvent.pageX ?? 0; }}
-      onTouchEnd={(e: any) => {
-        const endX = e.nativeEvent.pageX ?? 0;
-        const diff = endX - touchStartX.current;
-        if (diff < -80 && current >= fotos.length - 1 && onLastSwipe) onLastSwipe();
-      }}>
-      <ScrollView ref={scrollRef} horizontal pagingEnabled showsHorizontalScrollIndicator={false}
+    <View style={{ flex: 1, backgroundColor: "#000" }}>
+      <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false}
         scrollEventThrottle={16}
-        onScroll={e => setCurrent(Math.round(e.nativeEvent.contentOffset.x / SW))}>
+        onScroll={e => {
+          const idx = Math.round(e.nativeEvent.contentOffset.x / SW);
+          setCurrent(idx);
+        }}
+        onMomentumScrollEnd={e => {
+          const idx = Math.round(e.nativeEvent.contentOffset.x / SW);
+          if (idx >= fotos.length - 1 && onLastSwipe) {
+            const now = Date.now();
+            if (now - lastSwipeRef.current > 800) {
+              lastSwipeRef.current = now;
+            }
+          }
+        }}>
         {fotos.map((uri, i) => (
           <View key={i} style={{ width: SW, flex: 1 }}>
-            {Platform.OS === "web"
-              ? (React.createElement as any)("img", {
-                  src: uri, style: { width: "100%", height: "100%", objectFit: "cover", display: "block" }
-                })
-              : <Image source={{ uri }} style={{ width: SW, flex: 1 }} resizeMode="cover" />
-            }
+            <Image source={{ uri }} style={{ width: SW, flex: 1 }} resizeMode="cover" />
           </View>
         ))}
       </ScrollView>
       {fotos.length > 1 && (
-        <View style={{ position: "absolute", bottom: 12, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 5 }}>
+        <View style={{ position: "absolute", bottom: 12, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 5 }} pointerEvents="none">
           {fotos.map((_, i) => (
             <View key={i} style={{ width: i === current ? 16 : 6, height: 6, borderRadius: 3,
               backgroundColor: i === current ? "#fff" : "rgba(255,255,255,0.4)" }} />
