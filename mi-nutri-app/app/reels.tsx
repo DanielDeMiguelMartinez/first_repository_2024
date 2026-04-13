@@ -2184,24 +2184,31 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
           try {
             let uploadBlob: Blob;
             let contentType: string;
-            if ((foto as any).file) {
+            if ((foto as any).file && (foto as any).file instanceof Blob) {
               uploadBlob = (foto as any).file as Blob;
               contentType = (foto as any).file.type || "image/jpeg";
-            } else {
+            } else if (foto.uri) {
               const r = await fetch(foto.uri);
               uploadBlob = await r.blob();
               contentType = uploadBlob.type || "image/jpeg";
+            } else {
+              console.error("[subir foto] sin file ni uri", foto);
+              continue;
             }
-            const ext = contentType.includes("png") ? "png" : "jpg";
+            const ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
             const fpath = `${userId}/fotos/${Date.now()}_${i}.${ext}`;
+            console.log("[subir foto]", i, fpath, uploadBlob.size, contentType);
             const { error: fErr } = await supabase.storage
               .from("videos").upload(fpath, uploadBlob, { contentType, upsert: false });
             if (!fErr) {
               fotosUrls.push(supabase.storage.from("videos").getPublicUrl(fpath).data.publicUrl);
             } else {
-              console.error("[subir foto]", fErr.message);
+              console.error("[subir foto error]", fErr.message);
+              Alert.alert("Error foto " + (i + 1), fErr.message);
             }
-          } catch {}
+          } catch (e: any) {
+            console.error("[subir foto exception]", e?.message);
+          }
           setProgreso(50 + Math.round((i + 1) / effectiveFotos.length * 30));
         }
       }
