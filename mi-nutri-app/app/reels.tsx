@@ -731,6 +731,8 @@ function VideoPlayer({ url, active, filtro, camaraFrontal, cancionUrl, cancionSt
     el.muted = (webMuted !== false) || !!muteVideo;
     el.currentTime = 0;
     el.play?.().catch(() => { el.muted = true; el.play?.().catch(() => {}); });
+    // Evitar media session en pantalla de bloqueo
+    try { if ("mediaSession" in navigator) (navigator as any).mediaSession.metadata = null; } catch {}
 
     // Música: crear nueva
     if (musicRef.current) { musicRef.current.pause(); musicRef.current.src = ""; musicRef.current = null; }
@@ -744,6 +746,8 @@ function VideoPlayer({ url, active, filtro, camaraFrontal, cancionUrl, cancionSt
       musicAudio.currentTime = cancionStart ?? 0;
       musicRef.current = musicAudio;
       musicAudio.play?.().catch(() => {});
+      // Evitar que aparezca en la pantalla de bloqueo / centro de control
+      try { if ("mediaSession" in navigator) (navigator as any).mediaSession.metadata = null; } catch {}
     }
 
     // Sincronizar música cuando el vídeo loopea
@@ -2023,6 +2027,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
           audio.loop = false;
           audio.play?.().catch(() => {});
           previewMusicRef.current = audio;
+          try { if ("mediaSession" in navigator) (navigator as any).mediaSession.metadata = null; } catch {}
         }
         // Tracking posición
         if (posIntervalEditorRef.current) clearInterval(posIntervalEditorRef.current);
