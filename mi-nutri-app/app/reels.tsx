@@ -3213,8 +3213,9 @@ export default function ReelsScreen() {
   const [sugeridosCreadores, setSugeridosCreadores] = useState<any[]>([]);
   const [savedVideoIds, setSavedVideoIds] = useState<Set<string>>(new Set());
   const [reelParaAnadir, setReelParaAnadir] = useState<{ reel: Reel; detalle: any } | null>(null);
+  const [navigatingAway, setNavigatingAway] = useState(false);
 
-  const feedPaused = modalSubir || !!confirmarBorrar || !!modalReceta || !!modalComentarios || modalBuscar;
+  const feedPaused = modalSubir || !!confirmarBorrar || !!modalReceta || !!modalComentarios || modalBuscar || navigatingAway;
 
   // Configurar audio session una sola vez al montar (necesario para iOS modo silencio)
   useEffect(() => {
@@ -3262,7 +3263,8 @@ export default function ReelsScreen() {
   }, [activeIdx, tab]);
 
   useFocusEffect(useCallback(() => {
-    // Reset scroll position on focus to avoid web reload desync
+    // Pantalla activa
+    setNavigatingAway(false);
     setActiveIdx(0);
     setTimeout(() => {
       if (scrollRef.current?.scrollTo) scrollRef.current.scrollTo({ y: 0, animated: false });
@@ -3270,7 +3272,8 @@ export default function ReelsScreen() {
     }, 0);
     let mounted = true;
     cargarDatos(mounted);
-    return () => { mounted = false; };
+    // Pantalla pierde foco → pausar todo
+    return () => { mounted = false; setNavigatingAway(true); };
   }, [tab]));
 
   const cargarDatos = async (mounted = true) => {
