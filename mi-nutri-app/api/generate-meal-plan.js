@@ -50,7 +50,8 @@ JSON only, ${lang}, no markdown:
       return new Response(jsonStr, { status: 200, headers: { "Content-Type": "application/json" } });
     } catch (e) {
       if (attempt < 1) continue;
-      return new Response(JSON.stringify({ error: "Error al generar" }), { status: 500 });
+      return new Response(JSON.stringify({ error: "Error: " + (e?.message || "desconocido") }), { status: 500 });
     }
   }
+  return new Response(JSON.stringify({ error: "Sin respuesta" }), { status: 500 });
 }
