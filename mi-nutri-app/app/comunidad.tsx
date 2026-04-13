@@ -101,12 +101,14 @@ export function ModalDetalle({
   onClose,
   nombreUsuario,
   avatarUri,
+  initialTab,
 }: {
   pub: Publicacion | null;
   visible: boolean;
   onClose: () => void;
   nombreUsuario: string;
   avatarUri?: string | null;
+  initialTab?: string;
 }) {
   const { colors, theme } = useApp();
   const [valoraciones, setValoraciones] = useState<Valoracion[]>([]);

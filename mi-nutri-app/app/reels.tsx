@@ -10,6 +10,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Video, ResizeMode } from "expo-av";
 import { Audio } from "expo-av";
+import * as Haptics from "expo-haptics";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, Alert, Animated, AppState, Dimensions, Image, Modal, PanResponder, Pressable,
@@ -605,7 +606,10 @@ function PhotoSlideshow({ fotos, active, onLastSwipe }: { fotos: string[]; activ
                 <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800" }}>›</Text>
               </TouchableOpacity>
             )}
-            {/* Dots */}
+            {/* Counter + Dots */}
+            <View style={{ position: "absolute", top: 12, right: 12, backgroundColor: "rgba(0,0,0,0.5)", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }} pointerEvents="none">
+              <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>{current + 1}/{fotos.length}</Text>
+            </View>
             <View style={{ position: "absolute", bottom: 12, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 5 }} pointerEvents="none">
               {fotos.map((_: string, i: number) => (
                 <View key={i} style={{ width: i === current ? 16 : 6, height: 6, borderRadius: 3,
@@ -649,12 +653,17 @@ function PhotoSlideshow({ fotos, active, onLastSwipe }: { fotos: string[]; activ
         ))}
       </ScrollView>
       {fotos.length > 1 && (
-        <View style={{ position: "absolute", bottom: 12, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 5 }} pointerEvents="none">
-          {fotos.map((_, i) => (
-            <View key={i} style={{ width: i === current ? 16 : 6, height: 6, borderRadius: 3,
-              backgroundColor: i === current ? "#fff" : "rgba(255,255,255,0.4)" }} />
-          ))}
-        </View>
+        <>
+          <View style={{ position: "absolute", top: 12, right: 12, backgroundColor: "rgba(0,0,0,0.5)", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }} pointerEvents="none">
+            <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>{current + 1}/{fotos.length}</Text>
+          </View>
+          <View style={{ position: "absolute", bottom: 12, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 5 }} pointerEvents="none">
+            {fotos.map((_, i) => (
+              <View key={i} style={{ width: i === current ? 16 : 6, height: 6, borderRadius: 3,
+                backgroundColor: i === current ? "#fff" : "rgba(255,255,255,0.4)" }} />
+            ))}
+          </View>
+        </>
       )}
     </View>
   );
@@ -992,8 +1001,9 @@ function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDel
       // Double tap (o más) → solo dar like, nunca quitar + corazón grande
       if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
       tapTimerRef.current = null;
-      if (!liked) onLike(); // solo dar like si no lo tiene ya
-      triggerBigHeart(); // siempre mostrar corazón
+      if (!liked) onLike();
+      triggerBigHeart();
+      try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
       Animated.sequence([
         Animated.spring(likeScale, { toValue: 1.6, useNativeDriver: true, speed: 50, bounciness: 14 }),
         Animated.spring(likeScale, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 4 }),
@@ -1110,6 +1120,19 @@ function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDel
       <TouchableOpacity style={r.actionBtn} onPress={onAnadirAlDia}>
         <View style={r.actionCircle}><Text style={{ fontSize: 20 }}>➕</Text></View>
         <Text style={r.actionLbl}>Añadir</Text>
+      </TouchableOpacity>
+
+      {/* Compartir */}
+      <TouchableOpacity style={r.actionBtn} onPress={async () => {
+        const url = `${Platform.OS === "web" ? window.location.origin : "https://mi-nutri-app-theta.vercel.app"}/reels`;
+        if (Platform.OS === "web" && navigator.share) {
+          try { await navigator.share({ title: `🍽 ${reel.titulo}`, text: `@${reel.autor}: ${reel.titulo}`, url }); } catch {}
+        } else if (Platform.OS === "web") {
+          try { await navigator.clipboard.writeText(url); Alert.alert("✅", "Enlace copiado"); } catch {}
+        }
+      }}>
+        <View style={r.actionCircle}><Text style={{ fontSize: 20 }}>↗</Text></View>
+        <Text style={r.actionLbl}>Compartir</Text>
       </TouchableOpacity>
 
       {/* Borrar (solo propio) */}
@@ -1329,6 +1352,15 @@ function ComentariosModal({ visible, reel, userId, nombreUsuario, avatarUri, onC
       const updated = [...comentarios, data as Comentario];
       setComentarios(updated);
       onCountChange?.(updated.length);
+      // Notificar al dueño del reel (si no eres tú)
+      if (reel.autor_id && reel.autor_id !== userId) {
+        supabase.from("notificaciones").insert([{
+          usuario_id: reel.autor_id, tipo: "comentario_reel",
+          de_id: userId, de_nombre: nombreUsuario || "Alguien",
+          de_avatar: avatarUri ?? null,
+          contenido: `comentó en tu reel "${reel.titulo}"`,
+        }]).then(() => {}).catch(() => {});
+      }
     }
     setTexto("");
     setReplyTo(null);
@@ -3787,10 +3819,16 @@ export default function ReelsScreen() {
             <Text style={h.back}>{t.back}</Text>
           </TouchableOpacity>
           <View style={h.tabs}>
-            <TouchableOpacity onPress={() => { setTab("parati"); setActiveIdx(0); setHashtagActivo(null); }}>
+            <TouchableOpacity onPress={() => {
+              if (tab === "parati") { setActiveIdx(0); cargarDatos(); } // refresh
+              else { setTab("parati"); setActiveIdx(0); setHashtagActivo(null); }
+            }}>
               <Text style={[h.tab, tab === "parati" && h.tabActive]}>{t.forYou}</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => { setTab("siguiendo"); setActiveIdx(0); setHashtagActivo(null); }}>
+            <TouchableOpacity onPress={() => {
+              if (tab === "siguiendo") { setActiveIdx(0); cargarDatos(); }
+              else { setTab("siguiendo"); setActiveIdx(0); setHashtagActivo(null); }
+            }}>
               <Text style={[h.tab, tab === "siguiendo" && h.tabActive]}>
                 {t.followingCount}{seguidosIds.size > 0 ? ` (${seguidosIds.size})` : ""}
               </Text>
