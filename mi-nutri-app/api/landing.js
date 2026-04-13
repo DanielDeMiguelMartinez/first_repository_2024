@@ -164,8 +164,8 @@ footer a:hover{text-decoration:underline}
 <footer>
   <p>© 2026 Mi Nutri. Todos los derechos reservados.</p>
   <p style="margin-top:12px">
-    <a href="/api/privacy">Privacidad</a>
-    <a href="/api/terms">Términos</a>
+    <a href="/api/legal?page=privacy">Privacidad</a>
+    <a href="/api/legal?page=terms">Términos</a>
   </p>
 </footer>
 

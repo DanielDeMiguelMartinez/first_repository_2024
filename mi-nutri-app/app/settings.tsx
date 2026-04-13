@@ -534,13 +534,13 @@ export default function SettingsScreen() {
         <View style={s.section}>
           <Text style={s.sectionLabel}>📜 Legal</Text>
           <TouchableOpacity style={{ paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 10 }}
-            onPress={() => { if (Platform.OS === "web") window.open("/api/privacy", "_blank"); }}>
+            onPress={() => { if (Platform.OS === "web") window.open("/api/legal?page=privacy", "_blank"); }}>
             <Text style={{ color: colors.textSub, fontSize: 14 }}>🔒 Política de Privacidad</Text>
             <Text style={{ color: colors.textMuted }}>›</Text>
           </TouchableOpacity>
           <View style={{ height: 1, backgroundColor: colors.cardBorder }} />
           <TouchableOpacity style={{ paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 10 }}
-            onPress={() => { if (Platform.OS === "web") window.open("/api/terms", "_blank"); }}>
+            onPress={() => { if (Platform.OS === "web") window.open("/api/legal?page=terms", "_blank"); }}>
             <Text style={{ color: colors.textSub, fontSize: 14 }}>📋 Términos de Uso</Text>
             <Text style={{ color: colors.textMuted }}>›</Text>
           </TouchableOpacity>
