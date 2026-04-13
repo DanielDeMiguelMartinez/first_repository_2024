@@ -492,10 +492,9 @@ export default function SettingsScreen() {
                 <TextInput
                   value={langSearch}
                   onChangeText={setLangSearch}
-                  placeholder={t.searchPlaceholder}
+                  placeholder="🔍 English, Español, Français..."
                   placeholderTextColor={colors.textMuted}
                   style={{ backgroundColor: colors.inputBg, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, color: colors.text, fontSize: 15, borderWidth: 1, borderColor: colors.inputBorder }}
-                  autoFocus
                 />
               </View>
               <FlatList
