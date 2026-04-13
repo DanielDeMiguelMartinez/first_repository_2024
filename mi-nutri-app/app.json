@@ -18,8 +18,8 @@
       "name": "Mi Nutri",
       "shortName": "MiNutri",
       "description": "Tu asistente de nutrición personalizado",
-      "themeColor": "#F5F0E8",
-      "backgroundColor": "#F5F0E8",
+      "themeColor": "#000000",
+      "backgroundColor": "#0A0F1A",
       "display": "standalone",
       "startUrl": "/",
       "lang": "es"
