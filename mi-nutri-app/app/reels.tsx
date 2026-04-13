@@ -1352,14 +1352,36 @@ function ComentariosModal({ visible, reel, userId, nombreUsuario, avatarUri, onC
       const updated = [...comentarios, data as Comentario];
       setComentarios(updated);
       onCountChange?.(updated.length);
-      // Notificar al dueño del reel (si no eres tú)
+      // Notificar al dueño del reel (agrupado: 1 notificación por reel)
       if (reel.autor_id && reel.autor_id !== userId) {
-        supabase.from("notificaciones").insert([{
-          usuario_id: reel.autor_id, tipo: "comentario_reel",
-          de_id: userId, de_nombre: nombreUsuario || "Alguien",
-          de_avatar: avatarUri ?? null,
-          contenido: `comentó en tu reel "${reel.titulo}"`,
-        }]).then(() => {}).catch(() => {});
+        (async () => {
+          try {
+            // Buscar notificación existente de comentarios en este reel
+            const { data: existing } = await supabase.from("notificaciones")
+              .select("id,contenido")
+              .eq("usuario_id", reel.autor_id)
+              .eq("tipo", "comentario_reel")
+              .eq("referencia_id", reel.id)
+              .limit(1);
+            if (existing && existing.length > 0) {
+              // Actualizar la existente con el nuevo nombre y marcar como no leída
+              const count = (existing[0].contenido?.match(/\d+/) || [null])[0];
+              const n = count ? parseInt(count) + 1 : 2;
+              await supabase.from("notificaciones").update({
+                de_id: userId, de_nombre: nombreUsuario || "Alguien", de_avatar: avatarUri ?? null,
+                contenido: `${n} comentarios en "${reel.titulo}"`, leida: false, creado_en: new Date().toISOString(),
+              }).eq("id", existing[0].id);
+            } else {
+              // Crear nueva
+              await supabase.from("notificaciones").insert([{
+                usuario_id: reel.autor_id, tipo: "comentario_reel",
+                de_id: userId, de_nombre: nombreUsuario || "Alguien",
+                de_avatar: avatarUri ?? null, referencia_id: reel.id,
+                contenido: `comentó en tu reel "${reel.titulo}"`,
+              }]);
+            }
+          } catch {}
+        })();
       }
     }
     setTexto("");
