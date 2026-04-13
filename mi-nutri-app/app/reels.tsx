@@ -2087,8 +2087,12 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
           Alert.alert("Error", "No se pudo procesar el vídeo");
           return;
         }
+      } else if (videoClips.length === 0 && photoClips.length > 0) {
+        // Solo fotos → subirlas directamente
+        effectiveVideoFile = null;
+        effectiveFotos = photoClips.map(c => ({ uri: c.uri, file: c.file }));
       } else {
-        // Múltiples clips → compositor Canvas
+        // Múltiples clips con vídeo → compositor Canvas
         if (typeof MediaRecorder === "undefined") {
           Alert.alert("No soportado", "Tu navegador no admite grabación de canvas. Prueba en Chrome o Edge.");
           return;
