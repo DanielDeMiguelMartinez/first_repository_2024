@@ -3,6 +3,10 @@ import { buscarAlimentoPorCodigo, buscarAlimentosPersonalizados, guardarProducto
 
 const USDA_API_KEY = "zZ5WbhNqDzYmCy70MjhziQVbfZmLKH0aAyFgKNpX";
 
+let _userLanguage = "es";
+export function setUserLanguage(lang: string) { _userLanguage = lang; }
+export function getUserLanguage() { return _userLanguage; }
+
 export type Producto = {
   nombre: string;
   supermercado: string;
