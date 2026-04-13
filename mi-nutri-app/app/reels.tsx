@@ -537,39 +537,37 @@ function PhotoSlideshow({ fotos, active, onLastSwipe }: { fotos: string[]; activ
   useEffect(() => { if (active) setCurrent(0); }, [active]);
 
   const isDesktop = Platform.OS === "web" && SW >= 768;
+  const desktopScrollRef = useRef<any>(null);
+
+  const goToPhoto = (idx: number) => {
+    if (desktopScrollRef.current) {
+      desktopScrollRef.current.scrollTo({ left: idx * desktopScrollRef.current.clientWidth, behavior: "smooth" });
+    }
+  };
+
   if (isDesktop) {
     // Web desktop: CSS scroll-snap horizontal
     return (
       <View style={{ flex: 1, backgroundColor: "#000" }}>
         {(React.createElement as any)("div", {
           ref: (el: any) => {
+            desktopScrollRef.current = el;
             if (el && !el._setup) {
               el._setup = true;
               el.style.cssText = "display:flex;overflow-x:scroll;scroll-snap-type:x mandatory;height:100%;scrollbar-width:none;-webkit-overflow-scrolling:touch;";
               el.addEventListener("scroll", () => {
                 const idx = Math.round(el.scrollLeft / el.clientWidth);
                 setCurrent(idx);
-                // Detectar swipe extra en la última foto
                 if (idx >= fotos.length - 1) {
                   const maxScroll = el.scrollWidth - el.clientWidth;
                   if (el.scrollLeft >= maxScroll - 5) {
                     const now = Date.now();
-                    if (now - lastSwipeRef.current > 800) {
-                      lastSwipeRef.current = now;
-                      // Siguiente swipe en la última foto → perfil
-                      el._atEnd = true;
-                    }
+                    if (now - lastSwipeRef.current > 800) { lastSwipeRef.current = now; el._atEnd = true; }
                   }
-                } else {
-                  el._atEnd = false;
-                }
+                } else { el._atEnd = false; }
               }, { passive: true });
-              // Detectar touch en la última
               el.addEventListener("touchend", () => {
-                if (el._atEnd && onLastSwipe) {
-                  onLastSwipe();
-                  el._atEnd = false;
-                }
+                if (el._atEnd && onLastSwipe) { onLastSwipe(); el._atEnd = false; }
               });
             }
           },
@@ -586,13 +584,35 @@ function PhotoSlideshow({ fotos, active, onLastSwipe }: { fotos: string[]; activ
             )
           )
         )}
+        {/* Flechas + dots */}
         {fotos.length > 1 && (
-          <View style={{ position: "absolute", bottom: 12, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 5 }} pointerEvents="none">
-            {fotos.map((_: string, i: number) => (
-              <View key={i} style={{ width: i === current ? 16 : 6, height: 6, borderRadius: 3,
-                backgroundColor: i === current ? "#fff" : "rgba(255,255,255,0.4)" }} />
-            ))}
-          </View>
+          <>
+            {/* Flecha izquierda */}
+            {current > 0 && (
+              <TouchableOpacity
+                onPress={() => goToPhoto(current - 1)}
+                style={{ position: "absolute", left: 8, top: "50%", marginTop: -20, width: 40, height: 40, borderRadius: 20,
+                  backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center" }}>
+                <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800" }}>‹</Text>
+              </TouchableOpacity>
+            )}
+            {/* Flecha derecha */}
+            {current < fotos.length - 1 && (
+              <TouchableOpacity
+                onPress={() => goToPhoto(current + 1)}
+                style={{ position: "absolute", right: 8, top: "50%", marginTop: -20, width: 40, height: 40, borderRadius: 20,
+                  backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center" }}>
+                <Text style={{ color: "#fff", fontSize: 18, fontWeight: "800" }}>›</Text>
+              </TouchableOpacity>
+            )}
+            {/* Dots */}
+            <View style={{ position: "absolute", bottom: 12, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 5 }} pointerEvents="none">
+              {fotos.map((_: string, i: number) => (
+                <View key={i} style={{ width: i === current ? 16 : 6, height: 6, borderRadius: 3,
+                  backgroundColor: i === current ? "#fff" : "rgba(255,255,255,0.4)" }} />
+              ))}
+            </View>
+          </>
         )}
       </View>
     );
