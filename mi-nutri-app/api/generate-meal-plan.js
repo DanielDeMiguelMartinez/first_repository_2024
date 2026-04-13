@@ -27,6 +27,8 @@ async function verifyAuth(req) {
   } catch { return null; }
 }
 
+export const maxDuration = 60; // Vercel Pro: hasta 60s
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
@@ -96,8 +98,8 @@ USER PROFILE:
 - Cooking time: ${cookingTime || "medium"}
 - Meal slots per day: ${slots.join(", ")}
 
-Generate 7 days (${days.join(", ")}). Each meal needs name, ingredients with grams and macros, 2 alternative meals with similar macros, and 2 alternative ingredients per ingredient.
-ALL text in ${langName}. Distribute calories logically across meals.
+Generate 7 days (${days.join(", ")}). Each meal: name, ingredients (name+grams+macros), totals, 2 meal alternatives with similar macros. Keep ingredient alternatives minimal (1 each).
+ALL text in ${langName}. Be concise. Distribute calories logically.
 
 RESPOND WITH ONLY VALID JSON:
 {"days":[{"day":"${days[0]}","meals":{"${slots[0]}":{"name":"...","ingredients":[{"name":"...","grams":150,"kcal":200,"protein":25,"carbs":10,"fat":8,"alternatives":[{"name":"...","grams":140,"kcal":195,"protein":24,"carbs":11,"fat":7},{"name":"...","grams":160,"kcal":205,"protein":26,"carbs":9,"fat":9}]}],"totals":{"kcal":450,"protein":35,"carbs":40,"fat":18},"alternatives":[{"name":"...","ingredients":[...],"totals":{...}},{"name":"...","ingredients":[...],"totals":{...}}]}},"dayTotals":{"kcal":2000,"protein":150,"carbs":250,"fat":65}}]}`;
@@ -113,8 +115,8 @@ RESPOND WITH ONLY VALID JSON:
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 16000,
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 8000,
           messages: [{ role: "user", content: prompt }],
         }),
       });

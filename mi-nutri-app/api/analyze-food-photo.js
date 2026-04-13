@@ -29,6 +29,8 @@ async function verifyAuth(req) {
   } catch { return null; }
 }
 
+export const maxDuration = 30;
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
@@ -102,8 +104,8 @@ Be as accurate as possible with portion sizes.`;
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 2000,
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1500,
           messages: [{
             role: "user",
             content: [
