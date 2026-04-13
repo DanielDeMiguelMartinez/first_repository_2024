@@ -440,7 +440,7 @@ export default function SeguimientoScreen() {
           }
         }
       }
-    } catch {}
+    } catch (e: any) { console.warn("cargarHistorial:", e?.message); }
   };
 
   const guardarRegistro = async () => {
@@ -508,7 +508,7 @@ export default function SeguimientoScreen() {
             grasa_objetivo: nuevosMacros.fat,
             peso: pesoNum,
           }).eq("id", userId);
-        } catch {}
+        } catch (e: any) { console.warn("guardarRegistro cloud sync:", e?.message); }
       }
 
       setGoals(nuevosGoals);

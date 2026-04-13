@@ -687,6 +687,7 @@ export default function AddFoodScreen() {
   };
   const [cargando, setCargando] = useState(false);
   const [guardado, setGuardado] = useState(false);
+  const [guardando, setGuardando] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [recentFoods, setRecentFoods] = useState<RecentFood[]>([]);
   const [favorites, setFavorites] = useState<FavoriteFood[]>([]);
@@ -773,13 +774,13 @@ export default function AddFoodScreen() {
         const parsed: any[] = JSON.parse(recentRaw);
         setRecentFoods(parsed.map(f => ({ ...normalizarProducto(f), addedAt: f.addedAt })));
       }
-    } catch {}
+    } catch (e: any) { console.warn("loadRecentFoods:", e?.message); }
     const favsLocal = await cargarFavoritosStorage();
     setFavorites(favsLocal);
     try {
       const storedAlergias = await AsyncStorage.getItem("nutri_alergias");
       if (storedAlergias) setAlergias(JSON.parse(storedAlergias));
-    } catch {}
+    } catch (e: any) { console.warn("loadAlergias:", e?.message); }
 
     // 2. Merge con nube en background
     loadRecientesCloud().then(async cloudRec => {
@@ -1002,7 +1003,7 @@ export default function AddFoodScreen() {
             scrollRef.current?.scrollTo?.({ y: 0, animated: false });
           }
         }
-      } catch {}
+      } catch (e: any) { console.warn("buscarDB:", e?.message); }
 
       if (currentSearch.current !== texto) return;
 
@@ -1019,7 +1020,7 @@ export default function AddFoodScreen() {
             return todo;
           });
         }, PAIS_USUARIO);
-      } catch {}
+      } catch (e: any) { console.warn("buscarAPIs:", e?.message); }
 
       if (currentSearch.current === texto) setCargando(false);
     }, 200);
@@ -1407,9 +1408,11 @@ export default function AddFoodScreen() {
 
   // ── guardarAlimento ───────────────────────────────────────────────────────
   const guardarAlimento = async () => {
+    if (guardando || guardado) return;
     setSaveError(null);
     if (!producto) { setSaveError("Sin producto seleccionado."); return; }
     if (!macros)   { setSaveError("Sin macros calculados."); return; }
+    setGuardando(true);
 
     const targetKey = storageKeyParam || STORAGE_KEY;
     const fechaStr  = targetKey.replace("nutri_meals_", "");
@@ -1505,6 +1508,7 @@ export default function AddFoodScreen() {
       // Señal síncrona a index con el objeto de meals ya guardado
       signalMealSaved(meals, targetKey);
 
+      setGuardando(false);
       setGuardado(true);
       setTimeout(() => {
         // Volver al estado inicial para añadir otro alimento
@@ -1516,6 +1520,7 @@ export default function AddFoodScreen() {
         setGuardado(false);
       }, 800);
     } catch (e: any) {
+      setGuardando(false);
       setSaveError(e?.message ?? t.saveErrorMsg);
     }
   };
@@ -1855,7 +1860,8 @@ export default function AddFoodScreen() {
 
             {/* Añadir todo */}
             <TouchableOpacity
-              style={{ backgroundColor: "#4ADE80", borderRadius: 16, paddingVertical: 16, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8 }}
+              disabled={guardado}
+              style={{ backgroundColor: "#4ADE80", borderRadius: 16, paddingVertical: 16, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 8, opacity: guardado ? 0.6 : 1 }}
               onPress={async () => {
                 const key = storageKeyParam || STORAGE_KEY;
                 const stored = await AsyncStorage.getItem(key);
@@ -2011,8 +2017,8 @@ export default function AddFoodScreen() {
                 <Text style={{ color: "#EF4444", fontSize: 13, fontWeight: "600", textAlign: "center" }}>⚠ {saveError}</Text>
               </View>
             )}
-            <TouchableOpacity style={[s.saveBtn, guardado && s.saveBtnDone]} onPress={guardarAlimento} disabled={guardado}>
-              <Text style={s.saveBtnText}>{guardado ? t.saved : t.save}</Text>
+            <TouchableOpacity style={[s.saveBtn, guardado && s.saveBtnDone, guardando && { opacity: 0.6 }]} onPress={guardarAlimento} disabled={guardado || guardando}>
+              <Text style={s.saveBtnText}>{guardado ? t.saved : guardando ? t.loading : t.save}</Text>
             </TouchableOpacity>
           </View>
         )}

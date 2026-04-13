@@ -784,7 +784,7 @@ export default function HomeScreen() {
         setGoals(cloud);
         await AsyncStorage.setItem(GOALS_KEY, JSON.stringify(cloud));
       }
-    } catch {}
+    } catch (e: any) { console.warn("loadGoals:", e?.message); }
   };
 
   const loadWater = async (date: Date) => {
@@ -899,7 +899,7 @@ export default function HomeScreen() {
       if (prof) { const p = JSON.parse(prof); if (p?.peso) setPesoKg(Number(p.peso)); }
       const sesiones = await obtenerSesionesHoy();
       setSesionesHoy(sesiones);
-    } catch {}
+    } catch (e: any) { console.warn("cargarEjercicio:", e?.message); }
   };
 
   const guardarEjercicio = async () => {
@@ -932,7 +932,7 @@ export default function HomeScreen() {
   useFocusEffect(React.useCallback(() => {
     // Cargar frecuencia de comidas y plan semanal
     AsyncStorage.getItem(MEAL_FREQUENCY_KEY).then(v => { if (v) setMealFrequency(v); });
-    AsyncStorage.getItem("nutri_weekly_plan").then(v => { if (v) try { setWeeklyPlan(JSON.parse(v)); } catch {} });
+    AsyncStorage.getItem("nutri_weekly_plan").then(v => { if (v) try { setWeeklyPlan(JSON.parse(v)); } catch (e: any) { console.warn("weeklyPlan parse:", e?.message); } });
     // Si el cloud fue actualizado hace menos de 8s (p.ej. por signal de add-food), saltar cloud
     const skipCloud = Date.now() - lastCloudLoadRef.current < 8000;
     loadMeals(currentDate, skipCloud, false);
@@ -1167,7 +1167,7 @@ export default function HomeScreen() {
             const city = data.address?.city || data.address?.town || data.address?.village || "";
             setUserCountry(cc);
             setUserCity(city ? `${city}${cc ? ", " + cc.toUpperCase() : ""}` : cc.toUpperCase());
-          } catch {}
+          } catch (e: any) { console.warn("geocoding:", e?.message); }
           setLoadingLocation(false);
           buscarCercanos(latitude, longitude, cc);
         },
@@ -1265,7 +1265,7 @@ export default function HomeScreen() {
           setRecetaParaEditar(recetaConGramos);
           return;
         }
-      } catch {}
+      } catch (e: any) { console.warn("editFood recipe lookup:", e?.message); }
       // Community/external recipe — look up in saved recipes (have full ingredients)
       const raciones = (food as any).raciones ?? 1;
       try {
@@ -1301,7 +1301,7 @@ export default function HomeScreen() {
             return;
           }
         }
-      } catch {}
+      } catch (e: any) { console.warn("editFood saved recipes lookup:", e?.message); }
       // Fallback: try fetching from Supabase by recipe name
       try {
         const { data } = await supabase
@@ -1337,7 +1337,7 @@ export default function HomeScreen() {
           setRecetaParaEditar(recetaFromPub);
           return;
         }
-      } catch {}
+      } catch (e: any) { console.warn("editFood supabase lookup:", e?.message); }
       // Last resort: no ingredient data available, fall through to EditGramosModal
       setEditFood({ food, meal });
       return;

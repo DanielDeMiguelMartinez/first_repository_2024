@@ -423,7 +423,7 @@ export function BuscadorIngrediente({
             return merged;
           });
         }
-      } catch {}
+      } catch (e: any) { console.warn("buscarIngrediente:", e?.message); }
       finally { if (currentSearch.current === texto) setCargando(false); }
     }, 150);
   };

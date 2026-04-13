@@ -155,7 +155,7 @@ function MusicPickerModal({ visible, onClose, onSelect, videoDuration = 0 }: {
         const json = await res.json();
         return (json.results ?? []).filter((t: any) => t.previewUrl) as SongResult[];
       }
-    } catch {}
+    } catch (e: any) { console.warn("fetchMusic:", e?.message); }
     return [];
   };
 
@@ -174,7 +174,7 @@ function MusicPickerModal({ visible, onClose, onSelect, videoDuration = 0 }: {
         setLoading(false);
         return;
       }
-    } catch {}
+    } catch (e: any) { console.warn("loadCat:", e?.message); }
     setLoading(false);
   };
 
@@ -1126,9 +1126,9 @@ function ReelItem({ reel, active, liked, onLike, seguido, onFollow, esMio, onDel
       <TouchableOpacity style={r.actionBtn} onPress={async () => {
         const url = `${Platform.OS === "web" ? window.location.origin : "https://mi-nutri-app-theta.vercel.app"}/reels`;
         if (Platform.OS === "web" && navigator.share) {
-          try { await navigator.share({ title: `🍽 ${reel.titulo}`, text: `@${reel.autor}: ${reel.titulo}`, url }); } catch {}
+          try { await navigator.share({ title: `🍽 ${reel.titulo}`, text: `@${reel.autor}: ${reel.titulo}`, url }); } catch (e: any) { console.warn("share:", e?.message); }
         } else if (Platform.OS === "web") {
-          try { await navigator.clipboard.writeText(url); Alert.alert("✅", "Enlace copiado"); } catch {}
+          try { await navigator.clipboard.writeText(url); Alert.alert("✅", "Enlace copiado"); } catch (e: any) { console.warn("clipboard:", e?.message); }
         }
       }}>
         <View style={r.actionCircle}><Text style={{ fontSize: 20 }}>↗</Text></View>
@@ -2754,7 +2754,7 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
                             setSelectedFotos(s => [...s, { uri: photo.uri }]);
                             setStep("detalles");
                           }
-                        } catch {}
+                        } catch (e: any) { Alert.alert("Error", e?.message || "No se pudo tomar la foto"); }
                       }
                     : startRecording)}
                   activeOpacity={0.85}>
@@ -3229,7 +3229,8 @@ function ModalSubir({ visible, onClose, onSubido, nombreUsuario, userId, avatarU
             <TouchableOpacity
               style={{ backgroundColor: (subiendo || composing || (!videoFile && selectedFotos.length === 0 && clips.length === 0) || !userId) ? "#1E293B" : "#1F6FEB",
                 borderRadius: 20, paddingHorizontal: 24, paddingVertical: 12,
-                flexDirection: "row", alignItems: "center", gap: 8 }}
+                flexDirection: "row", alignItems: "center", gap: 8,
+                opacity: (subiendo || composing) ? 0.5 : 1 }}
               onPress={subir}
               disabled={subiendo || composing || (!videoFile && selectedFotos.length === 0 && clips.length === 0) || !userId}>
               {subiendo || composing
@@ -3611,7 +3612,7 @@ export default function ReelsScreen() {
       cursorRef.current = data[data.length - 1].creado_en;
       const raw = data.filter((r: any) => r.titulo || r.video_url || (r.fotos?.length ?? 0) > 0) as Reel[];
       setReels(prev => [...prev, ...raw]);
-    } catch {}
+    } catch (e: any) { console.warn("cargarMas:", e?.message); }
     finally { setLoadingMore(false); }
   };
 
