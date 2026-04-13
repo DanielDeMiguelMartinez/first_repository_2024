@@ -40,7 +40,7 @@ JSON only, no markdown:
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          model: "claude-3-haiku-20240307",
           max_tokens: 1500,
           messages: [{ role: "user", content: [
             { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } },
